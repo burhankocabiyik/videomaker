@@ -1,36 +1,23 @@
 {
   "name": "goat-ugc-ai",
-  "description": "GOAT UGC AI — SaaS AI content studio for apps and agencies. Image, video, lipsync, cinema and agent workflows powered by fal.ai, muapi.ai or local models.",
+  "description": "GOAT UGC AI — SaaS AI content studio for apps and agencies. End-to-end product video generation powered by fal.ai and Remotion.",
   "private": true,
-  "version": "0.1.0",
-  "workspaces": [
-    "packages/studio",
-    "packages/Vibe-Workflow/packages/workflow-builder",
-    "packages/Open-Poe-AI/packages/agents"
-  ],
+  "version": "0.2.0",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "build:studio": "npm run build -w studio",
-    "build:workflow": "npm run build -w workflow-builder",
-    "build:agent": "npm run build -w ai-agent",
-    "build:packages": "npm run build:workflow && npm run build:agent && npm run build:studio",
-    "setup": "npm install && npm run build:packages",
-    "postinstall": "npm run build:packages",
-    "vercel-build": "npm run build:packages && next build"
+    "vercel-build": "next build"
   },
   "dependencies": {
     "@fal-ai/client": "^1.2.0",
-    "ai-agent": "file:./packages/Open-Poe-AI/packages/agents",
-    "axios": "^1.7.0",
+    "@remotion/player": "^4.0.420",
+    "jszip": "^3.10.1",
     "next": "^15.0.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "react-hot-toast": "^2.4.1",
-    "studio": "*",
-    "workflow-builder": "file:./packages/Vibe-Workflow/packages/workflow-builder"
+    "remotion": "^4.0.420"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3",
