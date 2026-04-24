@@ -16,13 +16,32 @@ function PlayerSkeleton() {
     );
 }
 
-const DURATION_OPTIONS = [15, 30, 45, 60];
-const TONES = ['energetic', 'cinematic', 'playful', 'authoritative', 'inspirational'];
+const CLIP_DURATIONS = [
+    { id: 5,  label: '5 s clips' },
+    { id: 10, label: '10 s clips' },
+];
+const TONES = ['cinematic', 'energetic', 'playful', 'authoritative', 'inspirational'];
 
-function stateToStep(planning, generatingIds, doneIds, total) {
+const VIDEO_MODELS = [
+    { id: 'seedance-v2-pro',    label: 'Seedance v2 Pro (latest, recommended)' },
+    { id: 'seedance-v2-lite',   label: 'Seedance v2 Lite (cheapest)' },
+    { id: 'kling-v2.1-master',  label: 'Kling v2.1 Master (premium)' },
+    { id: 'kling-v2.1-pro',     label: 'Kling v2.1 Pro' },
+    { id: 'kling-v2.1-standard',label: 'Kling v2.1 Standard' },
+];
+
+const IMAGE_MODELS = [
+    { id: 'flux-schnell', label: 'Flux Schnell (fast)' },
+    { id: 'seedream-v4',  label: 'Seedream v4' },
+    { id: 'flux-dev',     label: 'Flux Dev' },
+    { id: 'flux-pro',     label: 'Flux 1.1 Pro' },
+    { id: 'nano-banana',  label: 'Nano Banana' },
+];
+
+function stateToStep(planning, generating, doneIds, totalScenes) {
     if (planning) return 'Planning scenes';
-    if (generatingIds.size > 0) return `Generating ${doneIds.size + 1}/${total} scene assets`;
-    if (total && doneIds.size === total) return 'Ready to preview';
+    if (generating.size > 0) return `Rendering ${doneIds.size}/${totalScenes}`;
+    if (totalScenes && doneIds.size === totalScenes) return 'All clips ready';
     return 'Idle';
 }
 
@@ -31,8 +50,11 @@ export default function VideoClient({ serverKeyConfigured, providerLabel }) {
         topic: '',
         tone: 'cinematic',
         audience: '',
-        durationSec: 30,
-        useVideoClips: false,
+        clipDuration: 5,
+        sceneCount: 6,
+        imageModel: 'flux-schnell',
+        videoModel: 'seedance-v2-pro',
+        useVideoClips: true,
     });
     const [plan, setPlan] = useState(null);
     const [assets, setAssets] = useState({});
@@ -44,13 +66,18 @@ export default function VideoClient({ serverKeyConfigured, providerLabel }) {
     const doneIds = useMemo(() => {
         const s = new Set();
         for (const [id, a] of Object.entries(assets)) {
-            if (a?.imageUrl || a?.videoUrl) s.add(Number(id));
+            const scene = plan?.scenes?.find((sc) => sc.id === Number(id));
+            if (!scene) continue;
+            // A scene is "done" when it has either a video clip (if clips are on)
+            // or at least an image (fallback / still mode).
+            if (form.useVideoClips ? a?.videoUrl : a?.imageUrl) s.add(Number(id));
         }
         return s;
-    }, [assets]);
+    }, [assets, plan, form.useVideoClips]);
 
     const totalScenes = plan?.scenes?.length || 0;
     const stepLabel = stateToStep(planning, generating, doneIds, totalScenes);
+    const durationSec = form.clipDuration * form.sceneCount;
 
     const onChange = (patch) => setForm((f) => ({ ...f, ...patch }));
 
@@ -67,63 +94,70 @@ export default function VideoClient({ serverKeyConfigured, providerLabel }) {
             const response = await fetch('/api/video/plan', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(form),
+                body: JSON.stringify({
+                    topic: form.topic,
+                    tone: form.tone,
+                    audience: form.audience,
+                    durationSec,
+                    sceneCount: form.sceneCount,
+                    clipDuration: form.clipDuration,
+                    useVideoClips: form.useVideoClips,
+                }),
                 signal: planAbort.current.signal,
             });
             const data = await response.json();
             if (!response.ok) throw new Error(data.error || 'Plan failed');
-            setPlan(data);
-            // Auto-fire scene asset generation.
-            data.scenes.forEach((scene) => generateAssetsFor(scene, data, form.useVideoClips));
+            // Snap scene durations to the clip duration we're rendering.
+            const scenes = data.scenes.map((s) => ({ ...s, duration: form.clipDuration }));
+            const snapped = { ...data, scenes };
+            setPlan(snapped);
+            snapped.scenes.forEach((scene) => generateAssetsFor(scene, snapped, form));
         } catch (err) {
             if (err.name !== 'AbortError') setErrors((e) => ({ ...e, global: err.message }));
         } finally {
             setPlanning(false);
         }
-    }, [form, planning]);
+    }, [form, planning, durationSec]);
 
-    const generateAssetsFor = useCallback(async (scene, localPlan, useVideoClips) => {
+    const generateAssetsFor = useCallback(async (scene, localPlan, localForm) => {
         setGenerating((g) => new Set(g).add(scene.id));
+        setErrors((e) => {
+            const { [scene.id]: _drop, ...rest } = e.byScene || {};
+            return { ...e, byScene: rest };
+        });
         try {
-            // Image first — always needed (video uses it as an anchor).
-            const imagePromise = fetch('/api/generate/image', {
+            // 1. Image — always generated, doubles as thumbnail + anchor frame.
+            const imageResponse = await fetch('/api/generate/image', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     prompt: [scene.imagePrompt, localPlan.style].filter(Boolean).join(', '),
-                    model: 'flux-schnell',
+                    model: localForm.imageModel,
                     image_size: 'landscape_16_9',
                 }),
-            }).then(async (r) => {
-                const d = await r.json();
-                if (!r.ok) throw new Error(d.error || 'image failed');
-                return d.url;
             });
-
-            const imageUrl = await imagePromise;
+            const imageData = await imageResponse.json();
+            if (!imageResponse.ok) throw new Error(imageData.error || 'image generation failed');
+            const imageUrl = imageData.url;
             setAssets((a) => ({ ...a, [scene.id]: { ...(a[scene.id] || {}), imageUrl } }));
 
-            if (useVideoClips && scene.videoPrompt) {
+            // 2. Video clip — image-to-video using the chosen model.
+            if (localForm.useVideoClips) {
                 const videoResponse = await fetch('/api/generate/video', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                        prompt: scene.videoPrompt,
+                        prompt: scene.videoPrompt || 'subtle cinematic motion, camera drift, film grain',
                         image_url: imageUrl,
-                        model: 'kling-v1',
-                        duration: scene.duration >= 10 ? '10' : '6',
+                        model: localForm.videoModel,
+                        duration: String(localForm.clipDuration),
                     }),
                 });
                 const vd = await videoResponse.json();
-                if (videoResponse.ok && vd.url) {
-                    setAssets((a) => ({ ...a, [scene.id]: { ...(a[scene.id] || {}), videoUrl: vd.url } }));
-                } else {
-                    // Non-fatal — fall back to Ken Burns on the still image.
-                    setErrors((e) => ({
-                        ...e,
-                        byScene: { ...e.byScene, [scene.id]: vd.error || 'video clip failed, using still' },
-                    }));
+                if (!videoResponse.ok || !vd.url) {
+                    throw new Error(vd.error || 'video clip failed');
                 }
+                setAssets((a) => ({ ...a, [scene.id]: { ...(a[scene.id] || {}), videoUrl: vd.url } }));
             }
         } catch (err) {
             setErrors((e) => ({ ...e, byScene: { ...e.byScene, [scene.id]: err.message } }));
@@ -138,30 +172,40 @@ export default function VideoClient({ serverKeyConfigured, providerLabel }) {
 
     const regenerateScene = (scene) => {
         setAssets((a) => { const n = { ...a }; delete n[scene.id]; return n; });
-        generateAssetsFor(scene, plan, form.useVideoClips);
+        generateAssetsFor(scene, plan, form);
     };
 
     const downloadZip = async () => {
         if (!plan) return;
         const { default: JSZip } = await import('jszip');
         const zip = new JSZip();
-        zip.file('plan.json', JSON.stringify({ plan, assets }, null, 2));
-        zip.file('README.txt', `GOAT UGC AI — exported asset bundle
+        zip.file('plan.json', JSON.stringify({ plan, assets, form }, null, 2));
+        zip.file('README.txt', [
+            'GOAT UGC AI — exported asset bundle',
+            '',
+            'plan.json          — full scene list with prompts and the original brief',
+            'scene-N-image.jpg  — still used as the anchor frame / thumbnail',
+            'scene-N-video.mp4  — generated motion clip (if enabled)',
+            '',
+            'Render locally with Remotion:',
+            '  1. npx create-video my-video (pick Hello World)',
+            '  2. Drop this folder into public/assets/',
+            '  3. Build a composition that sequences scene-N-video.mp4 for `form.clipDuration` seconds each.',
+            '  4. npx remotion render',
+        ].join('\n'));
 
-Use this bundle with Remotion locally:
-1. npx create-video my-video (pick Hello World template)
-2. Drop plan.json + images into the src/data folder
-3. Build a composition that iterates plan.scenes, playing each image or video for scene.duration seconds with the fade + Ken Burns animation of your choice
-4. npx remotion render --props='./src/data/plan.json'
-`);
         const fetches = Object.entries(assets).map(async ([id, a]) => {
             if (a.imageUrl) {
-                const blob = await fetch(a.imageUrl).then((r) => r.blob());
-                zip.file(`scene-${id}-image.jpg`, blob);
+                try {
+                    const blob = await fetch(a.imageUrl).then((r) => r.blob());
+                    zip.file(`scene-${id}-image.jpg`, blob);
+                } catch { /* skip */ }
             }
             if (a.videoUrl) {
-                const blob = await fetch(a.videoUrl).then((r) => r.blob());
-                zip.file(`scene-${id}-video.mp4`, blob);
+                try {
+                    const blob = await fetch(a.videoUrl).then((r) => r.blob());
+                    zip.file(`scene-${id}-video.mp4`, blob);
+                } catch { /* skip */ }
             }
         });
         await Promise.all(fetches);
@@ -176,7 +220,7 @@ Use this bundle with Remotion locally:
     const allReady = totalScenes > 0 && doneIds.size === totalScenes;
 
     return (
-        <div className="grid lg:grid-cols-[360px_1fr] gap-6">
+        <div className="grid lg:grid-cols-[380px_1fr] gap-6">
             {/* Brief panel */}
             <form onSubmit={handlePlan} className="rounded-xl border border-white/[0.05] bg-white/[0.02] p-5 flex flex-col gap-5 h-fit">
                 <div>
@@ -204,14 +248,32 @@ Use this bundle with Remotion locally:
                         </select>
                     </div>
                     <div>
-                        <label className="block text-[11px] font-bold text-white/40 uppercase tracking-wider mb-2">Duration</label>
+                        <label className="block text-[11px] font-bold text-white/40 uppercase tracking-wider mb-2">Scenes</label>
                         <select
-                            value={form.durationSec}
-                            onChange={(e) => onChange({ durationSec: Number(e.target.value) })}
+                            value={form.sceneCount}
+                            onChange={(e) => onChange({ sceneCount: Number(e.target.value) })}
                             className="w-full bg-black/40 border border-white/10 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-[#d9ff00]/30"
                         >
-                            {DURATION_OPTIONS.map((d) => <option key={d} value={d}>{d}s</option>)}
+                            {[3,4,5,6,7,8].map((n) => <option key={n} value={n}>{n}</option>)}
                         </select>
+                    </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                    <div>
+                        <label className="block text-[11px] font-bold text-white/40 uppercase tracking-wider mb-2">Clip length</label>
+                        <select
+                            value={form.clipDuration}
+                            onChange={(e) => onChange({ clipDuration: Number(e.target.value) })}
+                            className="w-full bg-black/40 border border-white/10 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-[#d9ff00]/30"
+                        >
+                            {CLIP_DURATIONS.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
+                        </select>
+                    </div>
+                    <div className="flex items-end">
+                        <div className="text-[12px] text-white/50 pb-1">
+                            Total: <span className="text-white font-semibold">{durationSec}s</span>
+                        </div>
                     </div>
                 </div>
 
@@ -225,6 +287,29 @@ Use this bundle with Remotion locally:
                     />
                 </div>
 
+                <div>
+                    <label className="block text-[11px] font-bold text-white/40 uppercase tracking-wider mb-2">Image model (anchor frame)</label>
+                    <select
+                        value={form.imageModel}
+                        onChange={(e) => onChange({ imageModel: e.target.value })}
+                        className="w-full bg-black/40 border border-white/10 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-[#d9ff00]/30"
+                    >
+                        {IMAGE_MODELS.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
+                    </select>
+                </div>
+
+                <div>
+                    <label className="block text-[11px] font-bold text-white/40 uppercase tracking-wider mb-2">Video model</label>
+                    <select
+                        value={form.videoModel}
+                        onChange={(e) => onChange({ videoModel: e.target.value })}
+                        disabled={!form.useVideoClips}
+                        className="w-full bg-black/40 border border-white/10 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-[#d9ff00]/30 disabled:opacity-40"
+                    >
+                        {VIDEO_MODELS.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
+                    </select>
+                </div>
+
                 <label className="flex items-center gap-3 text-[12px] text-white/70 cursor-pointer">
                     <input
                         type="checkbox"
@@ -232,7 +317,7 @@ Use this bundle with Remotion locally:
                         onChange={(e) => onChange({ useVideoClips: e.target.checked })}
                         className="accent-[#d9ff00] w-4 h-4"
                     />
-                    <span>Generate motion clips (fal.ai kling) — slower but more dynamic. Off = Ken Burns on stills (fast).</span>
+                    <span>Generate motion clips (Seedance / Kling). Turn off for cheap Ken Burns preview only.</span>
                 </label>
 
                 <button
@@ -240,7 +325,7 @@ Use this bundle with Remotion locally:
                     disabled={planning || !form.topic.trim()}
                     className="h-11 rounded-md bg-[#d9ff00] text-black text-sm font-bold hover:bg-[#e5ff33] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                 >
-                    {planning ? 'Planning…' : plan ? 'Re-plan with new brief' : 'Generate video plan'}
+                    {planning ? 'Planning…' : plan ? 'Re-plan with new brief' : 'Generate video'}
                 </button>
 
                 {!serverKeyConfigured ? (
@@ -251,6 +336,11 @@ Use this bundle with Remotion locally:
                 {errors.global ? (
                     <div className="text-[11px] text-red-400 bg-red-500/5 border border-red-500/20 rounded-md p-3">{errors.global}</div>
                 ) : null}
+
+                <div className="text-[11px] text-white/40 leading-relaxed">
+                    Heads up: motion clips take 60–180 s per scene on Seedance/Kling. All scenes render in parallel, so a 6-scene video
+                    usually lands in under 3 minutes.
+                </div>
             </form>
 
             {/* Canvas */}
@@ -265,7 +355,7 @@ Use this bundle with Remotion locally:
                             </div>
                             <div className="text-right">
                                 <div className="text-[11px] font-bold text-white/40 uppercase tracking-wider">{stepLabel}</div>
-                                <div className="text-sm text-white/70 mt-1">{doneIds.size}/{totalScenes} scenes ready</div>
+                                <div className="text-sm text-white/70 mt-1">{doneIds.size}/{totalScenes} clips ready</div>
                             </div>
                         </div>
                         <VideoPlayer scenes={plan.scenes} assets={assets} />
@@ -278,15 +368,16 @@ Use this bundle with Remotion locally:
                                 Download assets (.zip)
                             </button>
                             {!allReady ? (
-                                <span className="text-[11px] text-white/40">Scenes fill in as fal.ai returns each one.</span>
+                                <span className="text-[11px] text-white/40">Scenes fill in as fal.ai returns each clip.</span>
                             ) : (
-                                <span className="text-[11px] text-[#d9ff00]">All scenes ready. Hit play to watch.</span>
+                                <span className="text-[11px] text-[#d9ff00]">All clips ready. Hit play to watch.</span>
                             )}
                         </div>
                     </div>
                 ) : (
                     <div className="rounded-xl border border-dashed border-white/10 p-10 text-center text-sm text-white/40">
-                        Write a brief on the left, hit “Generate video plan”, and the director will hand back a scene-by-scene shot list.
+                        Write a brief on the left, hit “Generate video”, and the director will hand back a scene-by-scene shot list —
+                        then render each scene on Seedance or Kling.
                     </div>
                 )}
 
@@ -297,12 +388,20 @@ Use this bundle with Remotion locally:
                             {plan.scenes.map((scene) => {
                                 const a = assets[scene.id] || {};
                                 const busy = generating.has(scene.id);
-                                const ready = Boolean(a.imageUrl);
                                 const sceneErr = errors.byScene?.[scene.id];
                                 return (
                                     <li key={scene.id} className="flex gap-4 items-stretch">
                                         <div className="w-40 h-24 flex-none rounded-lg overflow-hidden bg-black/50 border border-white/5 relative">
-                                            {a.imageUrl ? (
+                                            {a.videoUrl ? (
+                                                <video
+                                                    src={a.videoUrl}
+                                                    className="w-full h-full object-cover"
+                                                    muted
+                                                    loop
+                                                    playsInline
+                                                    autoPlay
+                                                />
+                                            ) : a.imageUrl ? (
                                                 // eslint-disable-next-line @next/next/no-img-element
                                                 <img src={a.imageUrl} alt="" className="w-full h-full object-cover" />
                                             ) : (
@@ -312,6 +411,8 @@ Use this bundle with Remotion locally:
                                             )}
                                             {a.videoUrl ? (
                                                 <span className="absolute top-1 left-1 text-[9px] uppercase font-bold bg-[#d9ff00] text-black px-1.5 py-0.5 rounded">motion</span>
+                                            ) : a.imageUrl ? (
+                                                <span className="absolute top-1 left-1 text-[9px] uppercase font-bold bg-white/20 text-white/80 px-1.5 py-0.5 rounded">still</span>
                                             ) : null}
                                         </div>
                                         <div className="flex-1 min-w-0">
@@ -319,11 +420,16 @@ Use this bundle with Remotion locally:
                                                 <span className="font-bold text-white/80">Scene {scene.id}</span>
                                                 <span>·</span>
                                                 <span>{scene.duration}s</span>
-                                                <span>·</span>
-                                                <span className="capitalize">{scene.animation}</span>
                                             </div>
                                             <div className="text-sm text-white/85 leading-snug">&ldquo;{scene.voiceText}&rdquo;</div>
-                                            <div className="text-[11px] text-white/40 mt-1 line-clamp-2">{scene.imagePrompt}</div>
+                                            <div className="text-[11px] text-white/40 mt-1 line-clamp-2" title={scene.imagePrompt}>
+                                                <span className="text-white/60 font-semibold">IMG:</span> {scene.imagePrompt}
+                                            </div>
+                                            {scene.videoPrompt ? (
+                                                <div className="text-[11px] text-white/40 line-clamp-1" title={scene.videoPrompt}>
+                                                    <span className="text-white/60 font-semibold">MOTION:</span> {scene.videoPrompt}
+                                                </div>
+                                            ) : null}
                                             {sceneErr ? (
                                                 <div className="text-[11px] text-amber-400/80 mt-1">⚠ {sceneErr}</div>
                                             ) : null}
@@ -334,11 +440,11 @@ Use this bundle with Remotion locally:
                                                 disabled={busy}
                                                 className="h-8 px-3 rounded-md text-[11px] font-semibold bg-white/5 border border-white/10 hover:bg-white/10 disabled:opacity-40"
                                             >
-                                                {busy ? '...' : ready ? 'Regenerate' : 'Retry'}
+                                                {busy ? '...' : 'Regenerate'}
                                             </button>
-                                            {a.imageUrl ? (
+                                            {a.videoUrl ? (
                                                 <a
-                                                    href={a.imageUrl}
+                                                    href={a.videoUrl}
                                                     target="_blank"
                                                     rel="noreferrer"
                                                     className="h-8 px-3 rounded-md text-[11px] font-semibold text-white/60 border border-white/10 hover:bg-white/5 flex items-center justify-center"
