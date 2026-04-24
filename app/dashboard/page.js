@@ -56,13 +56,13 @@ export default function DashboardPage() {
           </Link>
 
           <Link
-            href="/studio"
+            href="/create"
             className="rounded-xl border border-white/10 bg-white/[0.02] p-6 hover:bg-white/[0.05] transition-colors"
           >
-            <div className="text-xs font-bold text-white/50 mb-2">PRO STUDIO</div>
-            <div className="text-xl font-bold">Full Open Generative AI studio</div>
+            <div className="text-xs font-bold text-white/50 mb-2">GENERATE</div>
+            <div className="text-xl font-bold">Images via {label}</div>
             <div className="text-sm text-white/60 mt-2">
-              Image / video / lipsync / cinema / agents / workflows. Muapi-powered; ideal for power users.
+              Flux, SDXL, Nano Banana and more. Prompt → asset in seconds. Video/lipsync/agents come with the Pro Studio (enable Muapi to unlock).
             </div>
           </Link>
 

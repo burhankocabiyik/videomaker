@@ -48,8 +48,8 @@ export default function HomePage() {
             <Link href="/dashboard" className="h-9 px-4 rounded-md text-xs font-semibold bg-white/5 border border-white/10 hover:bg-white/10 flex items-center">
               Dashboard
             </Link>
-            <Link href="/studio" className="h-9 px-4 rounded-md text-xs font-semibold bg-[#d9ff00] text-black hover:bg-[#e5ff33] flex items-center">
-              Open Studio →
+            <Link href="/create" className="h-9 px-4 rounded-md text-xs font-semibold bg-[#d9ff00] text-black hover:bg-[#e5ff33] flex items-center">
+              Start creating →
             </Link>
           </div>
         </div>
@@ -73,8 +73,8 @@ export default function HomePage() {
           </p>
 
           <div className="mt-10 flex flex-wrap gap-3">
-            <Link href="/studio" className="h-12 px-6 rounded-md text-sm font-semibold bg-[#d9ff00] text-black hover:bg-[#e5ff33] flex items-center shadow-lg shadow-[#d9ff00]/10">
-              Open Studio →
+            <Link href="/create" className="h-12 px-6 rounded-md text-sm font-semibold bg-[#d9ff00] text-black hover:bg-[#e5ff33] flex items-center shadow-lg shadow-[#d9ff00]/10">
+              Start creating →
             </Link>
             <Link href="/dashboard" className="h-12 px-6 rounded-md text-sm font-semibold bg-white/5 border border-white/10 hover:bg-white/10 flex items-center">
               View Dashboard
@@ -146,7 +146,7 @@ export default function HomePage() {
           © {new Date().getFullYear()} GOAT UGC AI · Open source (MIT) · Built on Open Generative AI + fal.ai
         </div>
         <div className="flex gap-4">
-          <Link href="/studio" className="hover:text-white">Studio</Link>
+          <Link href="/create" className="hover:text-white">Create</Link>
           <Link href="/dashboard" className="hover:text-white">Dashboard</Link>
           <a href="https://github.com/goatstarter/goat-ugc-ai" target="_blank" rel="noreferrer" className="hover:text-white">GitHub</a>
         </div>
