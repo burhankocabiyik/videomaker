@@ -14,6 +14,12 @@ export async function POST(request) {
         return NextResponse.json(result);
     } catch (error) {
         console.error('[api/generate/video]', error);
-        return NextResponse.json({ error: error.message || 'Generation failed' }, { status: 500 });
+        const detail = {
+            error: error.message || 'Generation failed',
+            name: error.name,
+            status: error.status,
+            body: error.body,
+        };
+        return NextResponse.json(detail, { status: 500 });
     }
 }
