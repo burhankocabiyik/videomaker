@@ -14,12 +14,24 @@ export async function POST(request) {
         return NextResponse.json(result);
     } catch (error) {
         console.error('[api/generate/video]', error);
-        const detail = {
+
+        // Fish fal.ai's structured validation error out, if present, and
+        // translate the most common ones into user-friendly messages so the
+        // /video UI can surface them per-scene.
+        const detail = error?.body?.detail?.[0];
+        if (detail?.type === 'content_policy_violation') {
+            return NextResponse.json({
+                error: 'content_policy_violation',
+                message: 'Seedance refused this image — it may show a recognizable face. Regenerating with a product/UI-focused prompt usually fixes it.',
+                field: Array.isArray(detail.loc) ? detail.loc.join('.') : null,
+            }, { status: 422 });
+        }
+
+        return NextResponse.json({
             error: error.message || 'Generation failed',
             name: error.name,
             status: error.status,
-            body: error.body,
-        };
-        return NextResponse.json(detail, { status: 500 });
+            fieldDetail: detail?.msg || null,
+        }, { status: 500 });
     }
 }
