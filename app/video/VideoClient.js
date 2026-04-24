@@ -23,8 +23,8 @@ const CLIP_DURATIONS = [
 const TONES = ['cinematic', 'energetic', 'playful', 'authoritative', 'inspirational'];
 
 const VIDEO_MODELS = [
-    { id: 'seedance-v2-pro',    label: 'Seedance v2 Pro (latest, recommended)' },
-    { id: 'seedance-v2-lite',   label: 'Seedance v2 Lite (cheapest)' },
+    { id: 'seedance-2',         label: 'Seedance 2.0 (latest, recommended)' },
+    { id: 'seedance-2-fast',    label: 'Seedance 2.0 Fast (cheapest)' },
     { id: 'kling-v2.1-master',  label: 'Kling v2.1 Master (premium)' },
     { id: 'kling-v2.1-pro',     label: 'Kling v2.1 Pro' },
     { id: 'kling-v2.1-standard',label: 'Kling v2.1 Standard' },
@@ -53,7 +53,7 @@ export default function VideoClient({ serverKeyConfigured, providerLabel }) {
         clipDuration: 5,
         sceneCount: 6,
         imageModel: 'flux-schnell',
-        videoModel: 'seedance-v2-pro',
+        videoModel: 'seedance-2',
         useVideoClips: true,
     });
     const [plan, setPlan] = useState(null);
