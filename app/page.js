@@ -49,9 +49,17 @@ export default function HomePage() {
             <Link href="/dashboard" className="h-9 px-4 rounded-md text-xs font-semibold bg-white/5 border border-white/10 hover:bg-white/10 flex items-center">
               Dashboard
             </Link>
-            <Link href="/video" className="h-9 px-4 rounded-md text-xs font-semibold bg-[#d9ff00] text-black hover:bg-[#e5ff33] flex items-center">
-              Build a video →
+            <Link href="/video" className="h-9 px-4 rounded-md text-xs font-semibold bg-white/5 border border-white/10 hover:bg-white/10 flex items-center">
+              Build a video
             </Link>
+            <a
+              href="https://burhankocabiyik.com"
+              target="_blank"
+              rel="noreferrer"
+              className="h-9 px-4 rounded-md text-xs font-semibold bg-[#d9ff00] text-black hover:bg-[#e5ff33] flex items-center shadow-lg shadow-[#d9ff00]/10"
+            >
+              burhankocabiyik.com ↗
+            </a>
           </div>
         </div>
       </header>

@@ -2,148 +2,154 @@
 
 **Type a topic. Ship a product video.**
 
-GOAT UGC AI is a SaaS-friendly, self-hostable AI video studio built for app founders and creative agencies.
-You give it a brief; it plans the shot list, writes every image prompt, generates visuals on fal.ai, and
-stitches them into a multi-scene video you can preview in-browser and render to 4K with [Remotion](https://www.remotion.dev).
+GOAT UGC AI is an open-source, self-hostable AI video studio for app founders, creators, and agencies.
+You give it a brief; it plans the shot list, writes every prompt, generates real motion clips on fal.ai
+(Seedance 2.0 / Kling v2.1), and stitches them in a [Remotion](https://www.remotion.dev) player you can
+preview in the browser and render to MP4 locally.
 
-No BYOK friction, no Muapi, no tabs: one key, one flow, open source.
+Live demo · [goat-ugc-ai.vercel.app](https://goat-ugc-ai.vercel.app)
 
-Inspired by and adapted from [goatstarter/GOAT-youtube](https://github.com/goatstarter/GOAT-youtube) — Remotion
-scene components, Ken Burns animations, and subtitle styling all ported over.
+> Built by [Burhan Kocabıyık](https://burhankocabiyik.com).
+> Inspired by and adapted from [goatstarter/GOAT-youtube](https://github.com/goatstarter/GOAT-youtube)
+> (Remotion patterns, scene component, prompting guide).
 
 ---
 
-## The pipeline
+## What it does
 
 | Stage | What happens | Powered by |
 |---|---|---|
-| 1. **Director** (`/api/video/plan`) | Scene-by-scene shot list with image prompts, motion prompts, voice lines, duration and animation per scene. | `fal-ai/any-llm` (Claude 3.5 Sonnet) |
-| 2. **Visuals** (`/api/generate/image`) | Each scene's still rendered at 1280×720 (or any aspect). | `fal-ai/flux/schnell` · `flux/dev` · `flux-pro` · `fast-sdxl` · `nano-banana` |
-| 3. **Motion** (`/api/generate/video`) — optional | Kling v1 turns the still into a 6–10s motion clip. Off by default so speed is king. | `fal-ai/kling-video` · `fal-ai/veo3/fast` · `fal-ai/ltx-video` |
-| 4. **Stitch** (client) | Remotion `Player` composes scenes with Ken Burns, fades, subtitles and the 16:9 layout. Download assets as `.zip` for local `remotion render`. | `@remotion/player`, `remotion`, `jszip` |
+| 1. **Director** (`/api/video/plan`) | Topic → scene-by-scene shot list with image prompts, motion prompts, voice lines, duration, and animation. | `fal-ai/any-llm` (default `openai/gpt-4o-mini`) |
+| 2. **Visuals** (`/api/generate/image`) — image-anchored mode | Anchor frame for each scene at 1280×720. | Flux Schnell · Flux Dev · Flux 1.1 Pro · **Nano Banana Pro** · **Nano Banana 2** · Seedream v4 · SDXL |
+| 3. **Motion** (`/api/generate/video`) | Real AI motion clips per scene — image-to-video or text-to-video. | **Seedance 2.0** · Seedance 2.0 Fast · Kling v2.1 Master / Pro / Standard · Seedance 2.0 t2v |
+| 4. **Stitch** (client) | Remotion `Player` composes scenes with fades, subtitles, optional Ken Burns. Edit / reorder / regenerate scenes inline. | `@remotion/player`, `remotion`, `jszip` |
 
-All four stages share a **provider abstraction** (`lib/providers/`) so you can swap fal.ai for a local runtime without touching pages.
-
----
-
-## What's inside
-
-| Surface | Route | Notes |
-|---|---|---|
-| Landing | `/` | Marketing page, points at `/video` |
-| Video builder | `/video` | The primary flow — topic → scene plan → per-scene generation → Remotion Player preview |
-| Image quick-fire | `/create` | One-off hero images, Flux/SDXL/etc. |
-| Dashboard | `/dashboard` | Stats, jump-off, provider status |
-| Projects / brand kits | `/dashboard/projects` | Client-side project list |
-
-Route handlers:
-
-```
-app/api/
-├── config/                  reports active provider + capabilities
-├── generate/image/          unified image gen (provider-abstracted)
-├── generate/video/          unified video gen (provider-abstracted)
-└── video/plan/              scene planning via fal any-llm
-```
-
-Remotion lives in `components/remotion/`:
-
-```
-Scene.jsx                    Ken Burns + fade + subtitles (image OR video track)
-VideoComposition.jsx         <Series> of scenes, 1280×720@30fps
-Player.jsx                   <Player> wrapper for client-side preview
-```
-
-Provider adapters live in `lib/providers/`:
-
-```
-config.js                    AI_PROVIDER resolution + capability map
-fal.js                       fal.ai image + video adapter
-fal-llm.js                   fal any-llm adapter for scene planning
-local.js                     Local HTTP inference adapter
-index.js                     Unified façade
-```
+Up to **5 minutes** total / 30 scenes per video. All scenes render in parallel.
 
 ---
 
-## Quick start (cloud — fal.ai)
+## Two creation modes
+
+- **Image-anchored** (default) — generate a still per scene, then animate it. More controllable, lower variance, great for product UGC.
+- **Text-to-video** — skip stills entirely; send the scene prompt straight to Seedance 2.0 t2v. Best for abstract/dynamic shots where you don't need pixel-level control of the first frame.
+
+A toggle in the brief panel switches between them; the available video models update accordingly.
+
+---
+
+## Inline scene editor
+
+Right under the live Remotion player you get a Remotion-style timeline editor. For every scene:
+
+- ↑ / ↓ to reorder
+- ✕ to delete
+- "+ Add scene" to insert a new one
+- Inline edit subtitle / voice line, image prompt, motion prompt
+- 5 s / 10 s clip length toggle
+- Camera animation picker (zoom in/out, pan L/R, breathing, static) for the still
+- Per-scene **Regenerate** button (re-runs only that one)
+- Top toolbar: "Render missing scenes" and "Download assets (.zip)"
+
+Edits to subtitle / animation / duration update the player live.
+Prompt edits only kick in on the next regeneration so you don't burn credits.
+
+---
+
+## Self-host
+
+### 1. Local dev
 
 ```bash
+git clone <this-repo> goat-ugc-ai
+cd goat-ugc-ai
 cp .env.example .env.local
-# Set FAL_KEY
+# Get a key at https://fal.ai/dashboard/keys, paste into FAL_KEY
 npm install
 npm run dev   # http://localhost:3000
 ```
 
-Visit `/video`, type a topic, hit **Generate video plan**. You'll see scenes fill in live.
-
-### Deploying to Vercel
+### 2. Deploy to Vercel
 
 ```bash
 vercel link
-vercel env add FAL_KEY production
-vercel env add AI_PROVIDER production   # value: fal
+vercel env add FAL_KEY production       # paste your fal.ai key when prompted
+vercel env add AI_PROVIDER production    # value: fal
 vercel deploy --prod
 ```
 
-The live demo runs at **https://goat-ugc-ai.vercel.app**.
+That's it — no databases or auth required for the core flow. The dashboard's "Projects" view persists workspaces in `localStorage` until you wire a real DB.
 
----
-
-## Quick start (self-host — local GPU)
-
-Point the app at any HTTP endpoint that accepts `POST /generate` and returns `{ url }`:
+### 3. Run on your own GPU (no fal.ai)
 
 ```bash
 AI_PROVIDER=local LOCAL_INFERENCE_URL=http://127.0.0.1:7860 npm run dev
 ```
 
-Adapt `lib/providers/local.js` to your runtime's request shape — it's ~30 lines, read top to bottom.
-
----
-
-## Rendering to MP4
-
-The in-browser preview runs on `@remotion/player` (no server render needed). To export a final MP4:
-
-1. On `/video`, once scenes are ready, click **Download assets (.zip)**.
-2. Unzip locally. You'll get `plan.json` + `scene-N-image.jpg` (and optionally `scene-N-video.mp4`).
-3. In a Remotion project, wire a composition that reads `plan.json` and renders each `scene` using the same
-   `Scene` component shape as `components/remotion/Scene.jsx`.
-4. `npx remotion render` → 4K MP4.
-
-(The reason we don't render server-side on Vercel: a single FFmpeg+Chromium render blows past the serverless
-function budget. Remotion Lambda or a self-hosted worker is the right home for final render — a follow-up.)
+The local adapter is ~30 lines (`lib/providers/local.js`) — point it at your Ollama / ComfyUI / sd.cpp endpoint and adapt to your runtime's request shape.
 
 ---
 
 ## Environment variables
 
-| Var | Purpose |
-|---|---|
-| `AI_PROVIDER` | `fal` \| `local`. Omit to auto-detect. |
-| `FAL_KEY` | fal.ai API key — required for cloud generation. |
-| `LOCAL_INFERENCE_URL` | Base URL of your local inference server when `AI_PROVIDER=local`. |
+| Var | Required | Purpose |
+|---|---|---|
+| `FAL_KEY` | yes (cloud) | fal.ai API key |
+| `AI_PROVIDER` | no | `fal` (default) or `local` |
+| `FAL_LLM_MODEL` | no | Override scene-planner LLM (default `openai/gpt-4o-mini`) |
+| `LOCAL_INFERENCE_URL` | yes (local mode) | Base URL of your local inference server |
 
 See `.env.example`.
 
 ---
 
-## Roadmap
+## Architecture at a glance
 
-- [ ] Voice track via fal.ai TTS (`playai-tts` or `elevenlabs` mode) — plumbing ready, UI to come
-- [ ] Background music generation (fal-ai/stable-audio)
-- [ ] Remotion Lambda render trigger from the UI
-- [ ] Brand kits persisted in Postgres (Vercel Marketplace)
-- [ ] A/B variant sweep: re-generate all scenes with style B in one click
-- [ ] Storyboard import: paste a Google Doc brief → scenes
+```
+app/
+├── page.js                       Marketing landing
+├── video/                        Primary surface — brief, planner, editor, player
+├── create/                       Single-image quick-fire
+├── dashboard/                    SaaS shell + projects
+└── api/
+    ├── config/                   Active provider + capability summary
+    ├── generate/image/           Provider-abstracted image generation
+    ├── generate/video/           Provider-abstracted video generation
+    └── video/plan/               Scene planner via fal-ai/any-llm
+
+components/
+├── SaasNav.js                    Top nav across SaaS pages
+└── remotion/
+    ├── Scene.jsx                 Ken Burns + fade + subtitles
+    ├── VideoComposition.jsx      <Series> of scenes, 1280×720 @30fps
+    └── Player.jsx                Client-side <Player> wrapper
+
+lib/providers/
+├── config.js                     AI_PROVIDER resolution + capability map
+├── fal.js                        fal.ai image + video adapter (Seedance 2.0, Kling v2.1, Flux, Nano Banana 2/Pro)
+├── fal-llm.js                    fal any-llm scene planner
+├── local.js                      Local HTTP inference adapter
+└── index.js                      Unified façade
+```
+
+---
+
+## Contributing
+
+PRs welcome. The code is intentionally small and reads top-to-bottom — no
+framework gymnastics. Open an issue first for anything bigger than a
+20-line change so we can align on direction.
 
 ---
 
 ## Credits
 
-- [goatstarter/GOAT-youtube](https://github.com/goatstarter/GOAT-youtube) — Remotion patterns, Scene component, prompting guide
 - [Remotion](https://www.remotion.dev) — the renderer that makes in-browser composition possible
 - [fal.ai](https://fal.ai) — every generation in this pipeline
+- [goatstarter/GOAT-youtube](https://github.com/goatstarter/GOAT-youtube) — the Remotion + Scene component blueprint we adapted
+- Built by [Burhan Kocabıyık](https://burhankocabiyik.com)
 
-Licensed MIT.
+---
+
+## License
+
+MIT.
