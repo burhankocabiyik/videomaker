@@ -2,6 +2,7 @@
 
 import { useCallback, useMemo, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
+import SceneEditor from './SceneEditor';
 
 const VideoPlayer = dynamic(
     () => import('@/components/remotion/Player.jsx').then((m) => m.VideoPlayer),
@@ -16,13 +17,10 @@ function PlayerSkeleton() {
     );
 }
 
-const CLIP_DURATIONS = [
-    { id: 5,  label: '5 s clips' },
-    { id: 10, label: '10 s clips' },
-];
+const CLIP_DURATIONS = [5, 10];
 const TONES = ['cinematic', 'energetic', 'playful', 'authoritative', 'inspirational'];
 
-const VIDEO_MODELS = [
+const VIDEO_MODELS_I2V = [
     { id: 'seedance-2',         label: 'Seedance 2.0 (latest, recommended)' },
     { id: 'seedance-2-fast',    label: 'Seedance 2.0 Fast (cheapest)' },
     { id: 'kling-v2.1-master',  label: 'Kling v2.1 Master (premium)' },
@@ -30,19 +28,41 @@ const VIDEO_MODELS = [
     { id: 'kling-v2.1-standard',label: 'Kling v2.1 Standard' },
 ];
 
-const IMAGE_MODELS = [
-    { id: 'flux-schnell', label: 'Flux Schnell (fast)' },
-    { id: 'seedream-v4',  label: 'Seedream v4' },
-    { id: 'flux-dev',     label: 'Flux Dev' },
-    { id: 'flux-pro',     label: 'Flux 1.1 Pro' },
-    { id: 'nano-banana',  label: 'Nano Banana' },
+const VIDEO_MODELS_T2V = [
+    { id: 'seedance-2-t2v',     label: 'Seedance 2.0 (text-to-video)' },
 ];
+
+const IMAGE_MODELS = [
+    { id: 'flux-schnell',     label: 'Flux Schnell (fast)' },
+    { id: 'nano-banana-pro',  label: 'Nano Banana Pro (Google, premium)' },
+    { id: 'nano-banana-2',    label: 'Nano Banana 2 (Google, fast)' },
+    { id: 'seedream-v4',      label: 'Seedream v4' },
+    { id: 'flux-dev',         label: 'Flux Dev' },
+    { id: 'flux-pro',         label: 'Flux 1.1 Pro' },
+    { id: 'nano-banana',      label: 'Nano Banana 1 (legacy)' },
+];
+
+const SCENE_COUNT_OPTIONS = [3, 4, 5, 6, 8, 10, 12, 15, 18, 20, 24, 30];
 
 function stateToStep(planning, generating, doneIds, totalScenes) {
     if (planning) return 'Planning scenes';
     if (generating.size > 0) return `Rendering ${doneIds.size}/${totalScenes}`;
     if (totalScenes && doneIds.size === totalScenes) return 'All clips ready';
     return 'Idle';
+}
+
+function nextSceneId(scenes) {
+    const max = scenes.reduce((m, s) => Math.max(m, Number(s.id) || 0), 0);
+    return max + 1;
+}
+
+function reorder(arr, idx, delta) {
+    const next = [...arr];
+    const target = idx + delta;
+    if (target < 0 || target >= next.length) return arr;
+    const [item] = next.splice(idx, 1);
+    next.splice(target, 0, item);
+    return next;
 }
 
 export default function VideoClient({ serverKeyConfigured, providerLabel }) {
@@ -54,6 +74,8 @@ export default function VideoClient({ serverKeyConfigured, providerLabel }) {
         sceneCount: 6,
         imageModel: 'flux-schnell',
         videoModel: 'seedance-2',
+        videoModelT2V: 'seedance-2-t2v',
+        textOnly: false,
         useVideoClips: true,
     });
     const [plan, setPlan] = useState(null);
@@ -63,21 +85,24 @@ export default function VideoClient({ serverKeyConfigured, providerLabel }) {
     const [generating, setGenerating] = useState(new Set());
     const planAbort = useRef(null);
 
+    const totalScenes = plan?.scenes?.length || 0;
+    const totalDuration = useMemo(
+        () => (plan?.scenes || []).reduce((acc, s) => acc + (Number(s.duration) || 0), 0),
+        [plan],
+    );
+
     const doneIds = useMemo(() => {
         const s = new Set();
         for (const [id, a] of Object.entries(assets)) {
-            const scene = plan?.scenes?.find((sc) => sc.id === Number(id));
+            const idNum = Number(id);
+            const scene = plan?.scenes?.find((sc) => sc.id === idNum);
             if (!scene) continue;
-            // A scene is "done" when it has either a video clip (if clips are on)
-            // or at least an image (fallback / still mode).
-            if (form.useVideoClips ? a?.videoUrl : a?.imageUrl) s.add(Number(id));
+            if (form.useVideoClips ? a?.videoUrl : (form.textOnly ? a?.videoUrl : a?.imageUrl)) s.add(idNum);
         }
         return s;
-    }, [assets, plan, form.useVideoClips]);
+    }, [assets, plan, form.useVideoClips, form.textOnly]);
 
-    const totalScenes = plan?.scenes?.length || 0;
     const stepLabel = stateToStep(planning, generating, doneIds, totalScenes);
-    const durationSec = form.clipDuration * form.sceneCount;
 
     const onChange = (patch) => setForm((f) => ({ ...f, ...patch }));
 
@@ -91,6 +116,7 @@ export default function VideoClient({ serverKeyConfigured, providerLabel }) {
         setPlan(null);
         setPlanning(true);
         try {
+            const totalDurationSec = form.sceneCount * form.clipDuration;
             const response = await fetch('/api/video/plan', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -98,7 +124,7 @@ export default function VideoClient({ serverKeyConfigured, providerLabel }) {
                     topic: form.topic,
                     tone: form.tone,
                     audience: form.audience,
-                    durationSec,
+                    durationSec: totalDurationSec,
                     sceneCount: form.sceneCount,
                     clipDuration: form.clipDuration,
                     useVideoClips: form.useVideoClips,
@@ -107,7 +133,6 @@ export default function VideoClient({ serverKeyConfigured, providerLabel }) {
             });
             const data = await response.json();
             if (!response.ok) throw new Error(data.error || 'Plan failed');
-            // Snap scene durations to the clip duration we're rendering.
             const scenes = data.scenes.map((s) => ({ ...s, duration: form.clipDuration }));
             const snapped = { ...data, scenes };
             setPlan(snapped);
@@ -117,7 +142,7 @@ export default function VideoClient({ serverKeyConfigured, providerLabel }) {
         } finally {
             setPlanning(false);
         }
-    }, [form, planning, durationSec]);
+    }, [form, planning]);
 
     const generateAssetsFor = useCallback(async (scene, localPlan, localForm) => {
         setGenerating((g) => new Set(g).add(scene.id));
@@ -126,36 +151,43 @@ export default function VideoClient({ serverKeyConfigured, providerLabel }) {
             return { ...e, byScene: rest };
         });
         try {
-            // 1. Image — always generated, doubles as thumbnail + anchor frame.
-            const imageResponse = await fetch('/api/generate/image', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    prompt: [scene.imagePrompt, localPlan.style].filter(Boolean).join(', '),
-                    model: localForm.imageModel,
-                    image_size: 'landscape_16_9',
-                }),
-            });
-            const imageData = await imageResponse.json();
-            if (!imageResponse.ok) throw new Error(imageData.error || 'image generation failed');
-            const imageUrl = imageData.url;
-            setAssets((a) => ({ ...a, [scene.id]: { ...(a[scene.id] || {}), imageUrl } }));
-
-            // 2. Video clip — image-to-video using the chosen model.
-            if (localForm.useVideoClips) {
-                const videoResponse = await fetch('/api/generate/video', {
+            let imageUrl = null;
+            if (!localForm.textOnly) {
+                // 1. Anchor image — only when image-anchored mode is on.
+                const imageResponse = await fetch('/api/generate/image', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                        prompt: scene.videoPrompt || 'subtle cinematic motion, camera drift, film grain',
-                        image_url: imageUrl,
-                        model: localForm.videoModel,
-                        duration: String(localForm.clipDuration),
+                        prompt: [scene.imagePrompt, localPlan?.style].filter(Boolean).join(', '),
+                        model: localForm.imageModel,
+                        image_size: 'landscape_16_9',
                     }),
+                });
+                const imageData = await imageResponse.json();
+                if (!imageResponse.ok) throw new Error(imageData.error || 'image generation failed');
+                imageUrl = imageData.url;
+                setAssets((a) => ({ ...a, [scene.id]: { ...(a[scene.id] || {}), imageUrl } }));
+            }
+
+            // 2. Motion clip — Seedance / Kling i2v, or Seedance t2v if textOnly.
+            if (localForm.useVideoClips || localForm.textOnly) {
+                const videoModelId = localForm.textOnly ? localForm.videoModelT2V : localForm.videoModel;
+                const videoBody = {
+                    prompt: [scene.videoPrompt || 'subtle cinematic motion, camera drift, film grain', localForm.textOnly ? scene.imagePrompt : null]
+                        .filter(Boolean).join('. '),
+                    model: videoModelId,
+                    duration: String(scene.duration || localForm.clipDuration),
+                };
+                if (!localForm.textOnly) videoBody.image_url = imageUrl;
+                const videoResponse = await fetch('/api/generate/video', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(videoBody),
                 });
                 const vd = await videoResponse.json();
                 if (!videoResponse.ok || !vd.url) {
-                    throw new Error(vd.error || 'video clip failed');
+                    const friendly = vd.message || vd.fieldDetail || vd.error || 'video clip failed';
+                    throw new Error(friendly);
                 }
                 setAssets((a) => ({ ...a, [scene.id]: { ...(a[scene.id] || {}), videoUrl: vd.url } }));
             }
@@ -170,9 +202,49 @@ export default function VideoClient({ serverKeyConfigured, providerLabel }) {
         }
     }, []);
 
+    // ── Scene editor mutators ────────────────────────────────────────────────
+    const updateScene = (id, patch) => {
+        setPlan((p) => p && ({ ...p, scenes: p.scenes.map((s) => s.id === id ? { ...s, ...patch } : s) }));
+    };
+    const removeScene = (id) => {
+        setPlan((p) => p && ({ ...p, scenes: p.scenes.filter((s) => s.id !== id) }));
+        setAssets((a) => { const n = { ...a }; delete n[id]; return n; });
+    };
+    const moveScene = (id, dir) => {
+        setPlan((p) => {
+            if (!p) return p;
+            const idx = p.scenes.findIndex((s) => s.id === id);
+            if (idx === -1) return p;
+            return { ...p, scenes: reorder(p.scenes, idx, dir) };
+        });
+    };
+    const addScene = () => {
+        setPlan((p) => {
+            if (!p) return p;
+            const id = nextSceneId(p.scenes);
+            const newScene = {
+                id,
+                duration: form.clipDuration,
+                imagePrompt: '',
+                videoPrompt: '',
+                voiceText: '',
+                subtitle: '',
+                animation: 'slowZoomIn',
+            };
+            return { ...p, scenes: [...p.scenes, newScene] };
+        });
+    };
     const regenerateScene = (scene) => {
         setAssets((a) => { const n = { ...a }; delete n[scene.id]; return n; });
         generateAssetsFor(scene, plan, form);
+    };
+    const generateAllMissing = () => {
+        if (!plan) return;
+        plan.scenes.forEach((scene) => {
+            if (!assets[scene.id]?.videoUrl && !generating.has(scene.id)) {
+                generateAssetsFor(scene, plan, form);
+            }
+        });
     };
 
     const downloadZip = async () => {
@@ -183,29 +255,24 @@ export default function VideoClient({ serverKeyConfigured, providerLabel }) {
         zip.file('README.txt', [
             'GOAT UGC AI — exported asset bundle',
             '',
-            'plan.json          — full scene list with prompts and the original brief',
-            'scene-N-image.jpg  — still used as the anchor frame / thumbnail',
-            'scene-N-video.mp4  — generated motion clip (if enabled)',
+            'plan.json          full scene list with prompts and the original brief',
+            'scene-N-image.jpg  anchor still (image-anchored mode only)',
+            'scene-N-video.mp4  generated motion clip',
             '',
-            'Render locally with Remotion:',
-            '  1. npx create-video my-video (pick Hello World)',
+            'Local Remotion render:',
+            '  1. npx create-video my-video',
             '  2. Drop this folder into public/assets/',
-            '  3. Build a composition that sequences scene-N-video.mp4 for `form.clipDuration` seconds each.',
+            '  3. Sequence scene-N-video.mp4 for `scene.duration` seconds each',
             '  4. npx remotion render',
         ].join('\n'));
-
         const fetches = Object.entries(assets).map(async ([id, a]) => {
             if (a.imageUrl) {
-                try {
-                    const blob = await fetch(a.imageUrl).then((r) => r.blob());
-                    zip.file(`scene-${id}-image.jpg`, blob);
-                } catch { /* skip */ }
+                try { const blob = await fetch(a.imageUrl).then((r) => r.blob()); zip.file(`scene-${id}-image.jpg`, blob); }
+                catch { /* skip */ }
             }
             if (a.videoUrl) {
-                try {
-                    const blob = await fetch(a.videoUrl).then((r) => r.blob());
-                    zip.file(`scene-${id}-video.mp4`, blob);
-                } catch { /* skip */ }
+                try { const blob = await fetch(a.videoUrl).then((r) => r.blob()); zip.file(`scene-${id}-video.mp4`, blob); }
+                catch { /* skip */ }
             }
         });
         await Promise.all(fetches);
@@ -218,20 +285,20 @@ export default function VideoClient({ serverKeyConfigured, providerLabel }) {
     };
 
     const allReady = totalScenes > 0 && doneIds.size === totalScenes;
+    const totalDurationSec = form.sceneCount * form.clipDuration;
+    const visibleVideoModels = form.textOnly ? VIDEO_MODELS_T2V : VIDEO_MODELS_I2V;
 
     return (
-        <div className="grid lg:grid-cols-[380px_1fr] gap-6">
+        <div className="grid lg:grid-cols-[400px_1fr] gap-6">
             {/* Brief panel */}
             <form onSubmit={handlePlan} className="rounded-xl border border-white/[0.05] bg-white/[0.02] p-5 flex flex-col gap-5 h-fit">
                 <div>
-                    <label className="block text-[11px] font-bold text-white/40 uppercase tracking-wider mb-2">
-                        What&apos;s the video about?
-                    </label>
+                    <label className="block text-[11px] font-bold text-white/40 uppercase tracking-wider mb-2">What&apos;s the video about?</label>
                     <textarea
                         value={form.topic}
                         onChange={(e) => onChange({ topic: e.target.value })}
                         rows={4}
-                        placeholder="30-second launch teaser for a B2B invoicing app — positions us against boring legacy tools, ends on a download CTA."
+                        placeholder="60-second launch teaser for a B2B invoicing app — positions us against boring legacy tools, ends on a download CTA."
                         className="w-full bg-black/40 border border-white/10 rounded-md px-4 py-3 text-sm resize-none focus:outline-none focus:ring-1 focus:ring-[#d9ff00]/30"
                     />
                 </div>
@@ -254,7 +321,7 @@ export default function VideoClient({ serverKeyConfigured, providerLabel }) {
                             onChange={(e) => onChange({ sceneCount: Number(e.target.value) })}
                             className="w-full bg-black/40 border border-white/10 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-[#d9ff00]/30"
                         >
-                            {[3,4,5,6,7,8].map((n) => <option key={n} value={n}>{n}</option>)}
+                            {SCENE_COUNT_OPTIONS.map((n) => <option key={n} value={n}>{n}</option>)}
                         </select>
                     </div>
                 </div>
@@ -267,12 +334,15 @@ export default function VideoClient({ serverKeyConfigured, providerLabel }) {
                             onChange={(e) => onChange({ clipDuration: Number(e.target.value) })}
                             className="w-full bg-black/40 border border-white/10 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-[#d9ff00]/30"
                         >
-                            {CLIP_DURATIONS.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
+                            {CLIP_DURATIONS.map((c) => <option key={c} value={c}>{c}s clips</option>)}
                         </select>
                     </div>
                     <div className="flex items-end">
                         <div className="text-[12px] text-white/50 pb-1">
-                            Total: <span className="text-white font-semibold">{durationSec}s</span>
+                            Total: <span className="text-white font-semibold">
+                                {Math.floor(totalDurationSec / 60) ? `${Math.floor(totalDurationSec / 60)}m ` : ''}
+                                {totalDurationSec % 60}s
+                            </span>
                         </div>
                     </div>
                 </div>
@@ -287,38 +357,41 @@ export default function VideoClient({ serverKeyConfigured, providerLabel }) {
                     />
                 </div>
 
-                <div>
-                    <label className="block text-[11px] font-bold text-white/40 uppercase tracking-wider mb-2">Image model (anchor frame)</label>
-                    <select
-                        value={form.imageModel}
-                        onChange={(e) => onChange({ imageModel: e.target.value })}
-                        className="w-full bg-black/40 border border-white/10 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-[#d9ff00]/30"
-                    >
-                        {IMAGE_MODELS.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
-                    </select>
+                <div className="rounded-md border border-white/10 bg-white/[0.02] p-3">
+                    <label className="flex items-center gap-3 text-[12px] text-white/80 cursor-pointer">
+                        <input
+                            type="checkbox"
+                            checked={form.textOnly}
+                            onChange={(e) => onChange({ textOnly: e.target.checked, useVideoClips: true })}
+                            className="accent-[#d9ff00] w-4 h-4"
+                        />
+                        <span><b>Text-to-video mode</b> — skip anchor images, generate clips straight from prompts</span>
+                    </label>
                 </div>
+
+                {!form.textOnly ? (
+                    <div>
+                        <label className="block text-[11px] font-bold text-white/40 uppercase tracking-wider mb-2">Image model (anchor frame)</label>
+                        <select
+                            value={form.imageModel}
+                            onChange={(e) => onChange({ imageModel: e.target.value })}
+                            className="w-full bg-black/40 border border-white/10 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-[#d9ff00]/30"
+                        >
+                            {IMAGE_MODELS.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
+                        </select>
+                    </div>
+                ) : null}
 
                 <div>
                     <label className="block text-[11px] font-bold text-white/40 uppercase tracking-wider mb-2">Video model</label>
                     <select
-                        value={form.videoModel}
-                        onChange={(e) => onChange({ videoModel: e.target.value })}
-                        disabled={!form.useVideoClips}
-                        className="w-full bg-black/40 border border-white/10 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-[#d9ff00]/30 disabled:opacity-40"
+                        value={form.textOnly ? form.videoModelT2V : form.videoModel}
+                        onChange={(e) => onChange(form.textOnly ? { videoModelT2V: e.target.value } : { videoModel: e.target.value })}
+                        className="w-full bg-black/40 border border-white/10 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-[#d9ff00]/30"
                     >
-                        {VIDEO_MODELS.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
+                        {visibleVideoModels.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
                     </select>
                 </div>
-
-                <label className="flex items-center gap-3 text-[12px] text-white/70 cursor-pointer">
-                    <input
-                        type="checkbox"
-                        checked={form.useVideoClips}
-                        onChange={(e) => onChange({ useVideoClips: e.target.checked })}
-                        className="accent-[#d9ff00] w-4 h-4"
-                    />
-                    <span>Generate motion clips (Seedance / Kling). Turn off for cheap Ken Burns preview only.</span>
-                </label>
 
                 <button
                     type="submit"
@@ -338,12 +411,12 @@ export default function VideoClient({ serverKeyConfigured, providerLabel }) {
                 ) : null}
 
                 <div className="text-[11px] text-white/40 leading-relaxed">
-                    Heads up: motion clips take 60–180 s per scene on Seedance/Kling. All scenes render in parallel, so a 6-scene video
-                    usually lands in under 3 minutes.
+                    Heads up: each Seedance/Kling clip lands in 60–180 s. Scenes render in parallel; a 10-scene 1m40s video
+                    typically finishes in ~3 minutes. Up to 5 minutes total / 30 scenes supported.
                 </div>
             </form>
 
-            {/* Canvas */}
+            {/* Canvas + Editor */}
             <div className="space-y-4">
                 {plan ? (
                     <div className="rounded-xl border border-white/[0.05] bg-white/[0.02] p-5">
@@ -352,6 +425,10 @@ export default function VideoClient({ serverKeyConfigured, providerLabel }) {
                                 <div className="text-[11px] font-bold text-[#d9ff00] uppercase tracking-wider mb-1">Director&apos;s cut</div>
                                 <div className="text-xl font-bold">{plan.title}</div>
                                 {plan.hook ? <div className="text-white/60 text-sm mt-1 max-w-lg">{plan.hook}</div> : null}
+                                <div className="text-[11px] text-white/40 mt-1">
+                                    {totalScenes} scene{totalScenes === 1 ? '' : 's'} ·
+                                    {' '}{Math.floor(totalDuration / 60) ? `${Math.floor(totalDuration / 60)}m ` : ''}{totalDuration % 60}s total
+                                </div>
                             </div>
                             <div className="text-right">
                                 <div className="text-[11px] font-bold text-white/40 uppercase tracking-wider">{stepLabel}</div>
@@ -361,103 +438,50 @@ export default function VideoClient({ serverKeyConfigured, providerLabel }) {
                         <VideoPlayer scenes={plan.scenes} assets={assets} />
                         <div className="flex flex-wrap items-center gap-2 mt-4">
                             <button
+                                onClick={generateAllMissing}
+                                disabled={allReady}
+                                className="h-9 px-4 rounded-md bg-white/5 border border-white/10 hover:bg-white/10 text-xs font-semibold disabled:opacity-40"
+                            >
+                                Render missing scenes
+                            </button>
+                            <button
                                 onClick={downloadZip}
                                 disabled={doneIds.size === 0}
                                 className="h-9 px-4 rounded-md bg-white/5 border border-white/10 hover:bg-white/10 text-xs font-semibold disabled:opacity-40"
                             >
                                 Download assets (.zip)
                             </button>
-                            {!allReady ? (
-                                <span className="text-[11px] text-white/40">Scenes fill in as fal.ai returns each clip.</span>
-                            ) : (
-                                <span className="text-[11px] text-[#d9ff00]">All clips ready. Hit play to watch.</span>
-                            )}
+                            <button
+                                onClick={addScene}
+                                className="h-9 px-4 rounded-md bg-[#d9ff00]/10 border border-[#d9ff00]/30 hover:bg-[#d9ff00]/20 text-[#d9ff00] text-xs font-semibold"
+                            >
+                                + Add scene
+                            </button>
+                            <span className="text-[11px] text-white/40 ml-auto">
+                                {allReady ? 'All clips ready · play above' : 'Scenes fill in as fal.ai returns each clip.'}
+                            </span>
                         </div>
                     </div>
                 ) : (
                     <div className="rounded-xl border border-dashed border-white/10 p-10 text-center text-sm text-white/40">
-                        Write a brief on the left, hit “Generate video”, and the director will hand back a scene-by-scene shot list —
-                        then render each scene on Seedance or Kling.
+                        Brief on the left, hit &ldquo;Generate video&rdquo;, and the director will hand back a scene-by-scene shot
+                        list. From there you can edit, reorder, add or delete scenes — the player updates instantly.
                     </div>
                 )}
 
                 {plan?.scenes?.length ? (
-                    <div className="rounded-xl border border-white/[0.05] bg-white/[0.02] p-5">
-                        <div className="text-[11px] font-bold text-white/40 uppercase tracking-wider mb-3">Scene shot list</div>
-                        <ul className="space-y-3">
-                            {plan.scenes.map((scene) => {
-                                const a = assets[scene.id] || {};
-                                const busy = generating.has(scene.id);
-                                const sceneErr = errors.byScene?.[scene.id];
-                                return (
-                                    <li key={scene.id} className="flex gap-4 items-stretch">
-                                        <div className="w-40 h-24 flex-none rounded-lg overflow-hidden bg-black/50 border border-white/5 relative">
-                                            {a.videoUrl ? (
-                                                <video
-                                                    src={a.videoUrl}
-                                                    className="w-full h-full object-cover"
-                                                    muted
-                                                    loop
-                                                    playsInline
-                                                    autoPlay
-                                                />
-                                            ) : a.imageUrl ? (
-                                                // eslint-disable-next-line @next/next/no-img-element
-                                                <img src={a.imageUrl} alt="" className="w-full h-full object-cover" />
-                                            ) : (
-                                                <div className="w-full h-full flex items-center justify-center text-white/30 text-[11px]">
-                                                    {busy ? 'Rendering…' : 'Queued'}
-                                                </div>
-                                            )}
-                                            {a.videoUrl ? (
-                                                <span className="absolute top-1 left-1 text-[9px] uppercase font-bold bg-[#d9ff00] text-black px-1.5 py-0.5 rounded">motion</span>
-                                            ) : a.imageUrl ? (
-                                                <span className="absolute top-1 left-1 text-[9px] uppercase font-bold bg-white/20 text-white/80 px-1.5 py-0.5 rounded">still</span>
-                                            ) : null}
-                                        </div>
-                                        <div className="flex-1 min-w-0">
-                                            <div className="flex items-center gap-2 text-[11px] text-white/50 mb-1">
-                                                <span className="font-bold text-white/80">Scene {scene.id}</span>
-                                                <span>·</span>
-                                                <span>{scene.duration}s</span>
-                                            </div>
-                                            <div className="text-sm text-white/85 leading-snug">&ldquo;{scene.voiceText}&rdquo;</div>
-                                            <div className="text-[11px] text-white/40 mt-1 line-clamp-2" title={scene.imagePrompt}>
-                                                <span className="text-white/60 font-semibold">IMG:</span> {scene.imagePrompt}
-                                            </div>
-                                            {scene.videoPrompt ? (
-                                                <div className="text-[11px] text-white/40 line-clamp-1" title={scene.videoPrompt}>
-                                                    <span className="text-white/60 font-semibold">MOTION:</span> {scene.videoPrompt}
-                                                </div>
-                                            ) : null}
-                                            {sceneErr ? (
-                                                <div className="text-[11px] text-amber-400/80 mt-1">⚠ {sceneErr}</div>
-                                            ) : null}
-                                        </div>
-                                        <div className="flex flex-col gap-2">
-                                            <button
-                                                onClick={() => regenerateScene(scene)}
-                                                disabled={busy}
-                                                className="h-8 px-3 rounded-md text-[11px] font-semibold bg-white/5 border border-white/10 hover:bg-white/10 disabled:opacity-40"
-                                            >
-                                                {busy ? '...' : 'Regenerate'}
-                                            </button>
-                                            {a.videoUrl ? (
-                                                <a
-                                                    href={a.videoUrl}
-                                                    target="_blank"
-                                                    rel="noreferrer"
-                                                    className="h-8 px-3 rounded-md text-[11px] font-semibold text-white/60 border border-white/10 hover:bg-white/5 flex items-center justify-center"
-                                                >
-                                                    Open ↗
-                                                </a>
-                                            ) : null}
-                                        </div>
-                                    </li>
-                                );
-                            })}
-                        </ul>
-                    </div>
+                    <SceneEditor
+                        scenes={plan.scenes}
+                        assets={assets}
+                        generating={generating}
+                        errors={errors.byScene || {}}
+                        textOnly={form.textOnly}
+                        onChange={updateScene}
+                        onRegenerate={regenerateScene}
+                        onMove={moveScene}
+                        onDelete={removeScene}
+                        onAdd={addScene}
+                    />
                 ) : null}
             </div>
         </div>

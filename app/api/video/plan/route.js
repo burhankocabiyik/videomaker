@@ -17,6 +17,8 @@ export async function POST(request) {
             durationSec: Number(body.durationSec) || 30,
             style: body.style,
             useVideoClips: Boolean(body.useVideoClips),
+            sceneCount: Number(body.sceneCount) || undefined,
+            clipDuration: Number(body.clipDuration) || undefined,
         });
         return NextResponse.json(plan);
     } catch (error) {
