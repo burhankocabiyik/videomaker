@@ -3,6 +3,7 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import SceneEditor from './SceneEditor';
+import { SCENE_TEMPLATES } from '@/lib/prompt-library.js';
 
 const VideoPlayer = dynamic(
     () => import('@/components/remotion/Player.jsx').then((m) => m.VideoPlayer),
@@ -105,6 +106,18 @@ export default function VideoClient({ serverKeyConfigured, providerLabel }) {
     const stepLabel = stateToStep(planning, generating, doneIds, totalScenes);
 
     const onChange = (patch) => setForm((f) => ({ ...f, ...patch }));
+
+    const applyTemplate = (template) => {
+        setForm((f) => ({
+            ...f,
+            topic: template.topic,
+            tone: template.tone || f.tone,
+            sceneCount: template.sceneCount || f.sceneCount,
+            clipDuration: template.clipDuration || f.clipDuration,
+            useVideoClips: template.useVideoClips ?? f.useVideoClips,
+            textOnly: template.textOnly ?? f.textOnly,
+        }));
+    };
 
     const handlePlan = useCallback(async (e) => {
         e?.preventDefault();
@@ -292,6 +305,31 @@ export default function VideoClient({ serverKeyConfigured, providerLabel }) {
         <div className="grid lg:grid-cols-[400px_1fr] gap-6">
             {/* Brief panel */}
             <form onSubmit={handlePlan} className="rounded-xl border border-white/[0.05] bg-white/[0.02] p-5 flex flex-col gap-5 h-fit">
+                <div>
+                    <label className="block text-[11px] font-bold text-white/40 uppercase tracking-wider mb-2">Templates (LTX-2 cinematographer style)</label>
+                    <div className="grid grid-cols-2 gap-1.5">
+                        {SCENE_TEMPLATES.map((t) => (
+                            <button
+                                key={t.id}
+                                type="button"
+                                onClick={() => applyTemplate(t)}
+                                title={t.notes}
+                                className="text-left h-auto py-2 px-2.5 rounded-md text-[11px] font-semibold bg-white/[0.03] border border-white/10 hover:bg-white/[0.07] hover:border-[#d9ff00]/30 text-white/80 transition-colors"
+                            >
+                                <span className="text-[#d9ff00] mr-1.5">{t.emoji}</span>{t.label}
+                            </button>
+                        ))}
+                    </div>
+                    <a
+                        href="https://github.com/goatstarter/goat-ugc-ai/blob/main/PROMPT_LIBRARY.md"
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-[10px] text-white/40 hover:text-white/70 mt-2 inline-block"
+                    >
+                        Read the full prompt library →
+                    </a>
+                </div>
+
                 <div>
                     <label className="block text-[11px] font-bold text-white/40 uppercase tracking-wider mb-2">What&apos;s the video about?</label>
                     <textarea
