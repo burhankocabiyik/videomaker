@@ -11,8 +11,12 @@ const PodcastPlayer = dynamic(
 const VIDEO_MODELS = [
     { id: 'seedance-2',         label: 'Seedance 2.0 (recommended)' },
     { id: 'seedance-2-fast',    label: 'Seedance 2.0 Fast' },
-    { id: 'kling-v2.1-pro',     label: 'Kling v2.1 Pro' },
+    { id: 'veo3-i2v',           label: 'Google Veo 3 (i2v)' },
+    { id: 'kling-v3-pro',       label: 'Kling v3 Pro (i2v)' },
+    { id: 'kling-v3-standard',  label: 'Kling v3 Standard (i2v)' },
+    { id: 'kling-v3-4k',        label: 'Kling v3 4K (i2v)' },
     { id: 'kling-v2.1-master',  label: 'Kling v2.1 Master' },
+    { id: 'kling-v2.1-pro',     label: 'Kling v2.1 Pro' },
 ];
 
 const IMAGE_MODELS = [
@@ -28,11 +32,12 @@ export default function PodcastClient({ serverKeyConfigured, providerLabel }) {
         showName: 'The Drop',
         audience: 'curious app users',
         tone: 'energetic explainer',
-        sceneCount: 12,
+        sceneCount: 10,
         clipDuration: 3,
         imageModel: 'nano-banana-2',
         videoModel: 'seedance-2',
         renderMotion: true,
+        renderVoice: true,
     });
     const [analysis, setAnalysis] = useState(null);
     const [analysisError, setAnalysisError] = useState('');
@@ -173,23 +178,40 @@ export default function PodcastClient({ serverKeyConfigured, providerLabel }) {
             const imageUrl = imageData.url;
             setAssets((a) => ({ ...a, [scene.id]: { ...(a[scene.id] || {}), imageUrl } }));
 
-            if (form.renderMotion) {
-                const videoResponse = await fetch('/api/generate/video', {
+            // Voice + motion run in parallel — TTS is fast, the video clip
+            // takes a couple of minutes, so we don't want to chain them.
+            const motionPromise = form.renderMotion
+                ? fetch('/api/generate/video', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                        prompt: scene.videoPrompt || 'subtle talking, head nods, soft hand gesture, natural micro-motion',
+                        prompt: scene.videoPrompt || 'subtle talking, mouth movement, soft head tilt, natural micro-motion',
                         image_url: imageUrl,
                         model: form.videoModel,
                         duration: String(scene.duration || form.clipDuration),
                         aspect_ratio: '9:16',
                     }),
-                });
-                const vd = await videoResponse.json();
-                if (!videoResponse.ok || !vd.url) {
-                    throw new Error(vd.message || vd.fieldDetail || vd.error || 'video clip failed');
+                  }).then(async (r) => ({ ok: r.ok, body: await r.json() }))
+                : null;
+
+            const voicePromise = form.renderVoice
+                ? fetch('/api/generate/voice', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ text: scene.text, speaker: scene.speaker }),
+                  }).then(async (r) => ({ ok: r.ok, body: await r.json() }))
+                : null;
+
+            const [motion, voice] = await Promise.all([motionPromise, voicePromise]);
+
+            if (motion) {
+                if (!motion.ok || !motion.body.url) {
+                    throw new Error(motion.body.message || motion.body.fieldDetail || motion.body.error || 'video clip failed');
                 }
-                setAssets((a) => ({ ...a, [scene.id]: { ...(a[scene.id] || {}), videoUrl: vd.url } }));
+                setAssets((a) => ({ ...a, [scene.id]: { ...(a[scene.id] || {}), videoUrl: motion.body.url } }));
+            }
+            if (voice && voice.ok && voice.body.url) {
+                setAssets((a) => ({ ...a, [scene.id]: { ...(a[scene.id] || {}), audioUrl: voice.body.url } }));
             }
 
             return { imageUrl };
@@ -340,7 +362,16 @@ export default function PodcastClient({ serverKeyConfigured, providerLabel }) {
                         onChange={(e) => onChange({ renderMotion: e.target.checked })}
                         className="accent-[#d9ff00] w-4 h-4"
                     />
-                    <span><b>Render motion clips</b> — Seedance/Kling animate each speaker shot. Off = stills only (fast).</span>
+                    <span><b>Render motion clips</b> — Seedance/Kling/Veo animate each speaker shot.</span>
+                </label>
+                <label className="flex items-center gap-3 text-[12px] text-white/70 cursor-pointer">
+                    <input
+                        type="checkbox"
+                        checked={form.renderVoice}
+                        onChange={(e) => onChange({ renderVoice: e.target.checked })}
+                        className="accent-[#d9ff00] w-4 h-4"
+                    />
+                    <span><b>Generate voices</b> — host &amp; guest get distinct TTS voices via fal-ai/playai. Off = silent video.</span>
                 </label>
 
                 <button

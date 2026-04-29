@@ -16,6 +16,7 @@ export function podcastTotalFrames(scenes) {
 export function PodcastComposition({ plan, assets = {} }) {
     const scenes = plan?.scenes || [];
     const brand = plan?.brandSticker || { copy: plan?.showName, position: 'top-left', shape: 'speech bubble' };
+    const productSticker = plan?.productSticker || null;
     const speakers = plan?.speakers || [];
 
     if (scenes.length === 0) {
@@ -37,9 +38,12 @@ export function PodcastComposition({ plan, assets = {} }) {
                             <PodcastScene
                                 imageSrc={a.imageUrl}
                                 videoSrc={a.videoUrl}
+                                audioSrc={a.audioUrl}
                                 captionText={scene.text}
                                 emphasis={scene.emphasis}
                                 brand={brand}
+                                productSticker={productSticker}
+                                showProductPop={Boolean(scene.productPop)}
                                 speakerLabel={speaker?.persona ? `${scene.speaker.toUpperCase()} · ${speaker.persona.split(',')[0]}` : scene.speaker.toUpperCase()}
                             />
                         </Series.Sequence>

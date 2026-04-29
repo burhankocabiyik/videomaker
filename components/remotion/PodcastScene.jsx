@@ -1,59 +1,76 @@
-import { AbsoluteFill, Img, Video, Audio, interpolate, useCurrentFrame, useVideoConfig } from 'remotion';
+import { AbsoluteFill, Img, Video, Audio, interpolate, spring, useCurrentFrame, useVideoConfig } from 'remotion';
 
+// ──────────────────────────────────────────────────────────────────────────
+// Caption — split into ALL-CAPS bold sans words and an optional italic-serif
+// emphasis word (matching the reference: "an APP for KIDS" / "you will not
+// BELIEVE..."). Words appear one or two at a time with a tiny pop.
+// ──────────────────────────────────────────────────────────────────────────
 function splitWords(text) {
     return String(text || '').trim().split(/\s+/).filter(Boolean);
 }
 
-/**
- * Word-by-word caption stack — bold white sans-serif with a thick black
- * stroke, like the example reference video. Caption sits in the lower
- * third. Each word "pops" with a brief scale animation when it enters.
- */
 function CaptionStack({ words, emphasis }) {
     const frame = useCurrentFrame();
-    const { durationInFrames, fps } = useVideoConfig();
-    const totalWords = words.length;
-    if (totalWords === 0) return null;
+    const { durationInFrames } = useVideoConfig();
+    const total = words.length;
+    if (total === 0) return null;
 
-    // Reveal one word per beat, but always show the last 2 words at minimum.
-    const wordsPerBeat = totalWords <= 4 ? 1 : 2;
-    const beatLength = Math.max(6, Math.floor(durationInFrames / Math.ceil(totalWords / wordsPerBeat)));
-    const visibleCount = Math.min(totalWords, Math.max(wordsPerBeat, Math.floor(frame / beatLength) * wordsPerBeat + wordsPerBeat));
+    const wordsPerBeat = total <= 4 ? 1 : 2;
+    const beats = Math.ceil(total / wordsPerBeat);
+    const beatLength = Math.max(8, Math.floor(durationInFrames / Math.max(1, beats)));
+    const visibleCount = Math.min(total, Math.max(wordsPerBeat, Math.floor(frame / beatLength) * wordsPerBeat + wordsPerBeat));
     const visible = words.slice(0, visibleCount);
+    const emphKey = emphasis ? String(emphasis).toLowerCase().replace(/[^a-z]/g, '') : null;
 
     return (
-        <AbsoluteFill style={{ justifyContent: 'flex-end', alignItems: 'center', paddingBottom: 220, pointerEvents: 'none' }}>
+        <AbsoluteFill style={{ justifyContent: 'flex-end', alignItems: 'center', paddingBottom: 240, pointerEvents: 'none' }}>
             <div style={{
                 maxWidth: '88%',
                 display: 'flex',
                 flexWrap: 'wrap',
                 justifyContent: 'center',
-                gap: '6px 14px',
-                fontFamily: 'Inter, system-ui, "SF Pro Display", sans-serif',
-                fontWeight: 900,
-                letterSpacing: '-0.5px',
-                fontSize: 56,
+                alignItems: 'baseline',
+                gap: '6px 16px',
                 lineHeight: 1.05,
                 textAlign: 'center',
             }}>
                 {visible.map((w, i) => {
                     const enterFrame = Math.floor(i / wordsPerBeat) * beatLength;
                     const localT = Math.max(0, frame - enterFrame);
-                    const pop = interpolate(localT, [0, 6], [0.6, 1], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' });
-                    const isEmphasis = emphasis && w.toLowerCase().replace(/[^a-z]/g, '') === String(emphasis).toLowerCase().replace(/[^a-z]/g, '');
-                    return (
-                        <span
-                            key={i}
-                            style={{
+                    const pop = interpolate(localT, [0, 6], [0.65, 1], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' });
+                    const isEmph = emphKey && w.toLowerCase().replace(/[^a-z]/g, '') === emphKey;
+
+                    if (isEmph) {
+                        // Italic serif word with soft white glow — emphasis style.
+                        return (
+                            <span key={i} style={{
+                                fontFamily: 'Georgia, "Times New Roman", serif',
+                                fontStyle: 'italic',
+                                fontWeight: 700,
                                 color: 'white',
-                                WebkitTextStroke: '4px black',
-                                paintOrder: 'stroke fill',
+                                fontSize: 64,
+                                letterSpacing: '-0.5px',
                                 transform: `scale(${pop})`,
                                 display: 'inline-block',
-                                fontStyle: isEmphasis ? 'italic' : 'normal',
-                                textShadow: '0 4px 12px rgba(0,0,0,0.6)',
-                            }}
-                        >
+                                textShadow: '0 4px 22px rgba(0,0,0,0.85), 0 0 12px rgba(255,255,255,0.35)',
+                            }}>
+                                {w}
+                            </span>
+                        );
+                    }
+                    return (
+                        <span key={i} style={{
+                            fontFamily: 'Inter, system-ui, "SF Pro Display", sans-serif',
+                            fontWeight: 900,
+                            fontSize: 56,
+                            letterSpacing: '-0.6px',
+                            color: 'white',
+                            WebkitTextStroke: '4px black',
+                            paintOrder: 'stroke fill',
+                            transform: `scale(${pop})`,
+                            display: 'inline-block',
+                            textShadow: '0 6px 16px rgba(0,0,0,0.55)',
+                        }}>
                             {w.toUpperCase()}
                         </span>
                     );
@@ -63,34 +80,41 @@ function CaptionStack({ words, emphasis }) {
     );
 }
 
-function BrandSticker({ brand }) {
+// ──────────────────────────────────────────────────────────────────────────
+// Sticker (show brand + optional product pop). Both rotate-skew with a soft
+// drop-shadow and a thin border, matching the example.
+// ──────────────────────────────────────────────────────────────────────────
+function Sticker({ brand, position = 'top-left', tilt = -6, mountFrame = 0, fontFamily = 'Inter' }) {
+    const frame = useCurrentFrame();
+    const { fps } = useVideoConfig();
     if (!brand?.copy) return null;
     const palette = String(brand.palette || '#000+#FFFFFF').split('+');
     const bg = palette[0] || '#000';
     const fg = palette[1] || '#fff';
-    const position = brand.position || 'top-left';
     const placement = {
         top: position.includes('top') ? 24 : undefined,
         bottom: position.includes('bottom') ? 24 : undefined,
-        left: position.includes('left') ? 18 : undefined,
-        right: position.includes('right') ? 18 : undefined,
+        left: position.includes('left') ? 16 : undefined,
+        right: position.includes('right') ? 16 : undefined,
     };
     const shape = brand.shape || 'speech bubble';
-
+    const enter = spring({ frame: Math.max(0, frame - mountFrame), fps, config: { damping: 12, stiffness: 220 } });
+    const scale = 0.6 + 0.4 * enter;
     return (
         <div style={{
             position: 'absolute',
             ...placement,
             zIndex: 30,
-            transform: 'rotate(-6deg)',
+            transform: `rotate(${tilt}deg) scale(${scale})`,
+            transformOrigin: position.includes('right') ? 'top right' : 'top left',
             background: bg,
             color: fg,
-            fontFamily: 'Inter, system-ui, sans-serif',
+            fontFamily,
             fontWeight: 900,
             fontSize: 26,
             letterSpacing: '-0.3px',
             padding: '10px 18px',
-            borderRadius: shape === 'capsule' ? 999 : '22px 22px 22px 4px',
+            borderRadius: shape === 'capsule' ? 999 : (shape === 'squiggle' ? '24px 30px 22px 28px' : '22px 22px 22px 4px'),
             boxShadow: '0 6px 0 rgba(0,0,0,0.25), 0 8px 22px rgba(0,0,0,0.35)',
             textTransform: 'uppercase',
             lineHeight: 1,
@@ -108,11 +132,13 @@ export function PodcastScene({
     captionText,
     emphasis,
     brand,
+    productSticker,
+    showProductPop = false,
     speakerLabel,
 }) {
     const frame = useCurrentFrame();
     const { durationInFrames } = useVideoConfig();
-    const FADE = 6;
+    const FADE = 5;
     const opacity = interpolate(
         frame,
         [0, FADE, durationInFrames - FADE, durationInFrames],
@@ -142,15 +168,25 @@ export function PodcastScene({
 
             {audioSrc ? <Audio src={audioSrc} /> : null}
 
-            <BrandSticker brand={brand} />
+            <Sticker brand={brand} position={brand?.position || 'top-left'} tilt={-6} />
+            {showProductPop && productSticker ? (
+                <Sticker
+                    brand={productSticker}
+                    position="top-center-product"
+                    tilt={-4}
+                    mountFrame={4}
+                    fontFamily='"Quicksand", "Comic Sans MS", system-ui, sans-serif'
+                />
+            ) : null}
+
             <CaptionStack words={words} emphasis={emphasis} />
 
             {speakerLabel ? (
                 <div style={{
-                    position: 'absolute', left: 18, bottom: 24, zIndex: 30,
-                    fontFamily: 'Inter, sans-serif', fontWeight: 700, fontSize: 14,
+                    position: 'absolute', left: 18, bottom: 30, zIndex: 30,
+                    fontFamily: 'Inter, sans-serif', fontWeight: 700, fontSize: 12,
                     color: 'rgba(255,255,255,0.7)', letterSpacing: 2, textTransform: 'uppercase',
-                    background: 'rgba(0,0,0,0.4)', padding: '6px 10px', borderRadius: 6,
+                    background: 'rgba(0,0,0,0.4)', padding: '4px 8px', borderRadius: 4,
                 }}>
                     {speakerLabel}
                 </div>
