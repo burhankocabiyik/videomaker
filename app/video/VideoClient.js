@@ -321,7 +321,7 @@ export default function VideoClient({ serverKeyConfigured, providerLabel }) {
                         ))}
                     </div>
                     <a
-                        href="https://github.com/goatstarter/goat-ugc-ai/blob/main/PROMPT_LIBRARY.md"
+                        href="https://github.com/burhankocabiyik/videomaker/blob/main/PROMPT_LIBRARY.md"
                         target="_blank"
                         rel="noreferrer"
                         className="text-[10px] text-white/40 hover:text-white/70 mt-2 inline-block"

@@ -45,7 +45,7 @@ export default function SaasNav({ provider }) {
             </div>
           ) : null}
           <a
-            href="https://github.com/goatstarter/goat-ugc-ai"
+            href="https://github.com/burhankocabiyik/videomaker"
             target="_blank"
             rel="noreferrer"
             className="text-xs font-semibold text-white/60 hover:text-white h-9 px-3 rounded-md flex items-center"

@@ -43,7 +43,7 @@ export default function HomePage() {
             <a href="#pipeline" className="hover:text-white">Pipeline</a>
             <a href="#use-cases" className="hover:text-white">Use cases</a>
             <a href="#self-host" className="hover:text-white">Self-host</a>
-            <a href="https://github.com/goatstarter/goat-ugc-ai" target="_blank" rel="noreferrer" className="hover:text-white">GitHub</a>
+            <a href="https://github.com/burhankocabiyik/videomaker" target="_blank" rel="noreferrer" className="hover:text-white">GitHub</a>
           </nav>
           <div className="flex items-center gap-3">
             <Link href="/dashboard" className="h-9 px-4 rounded-md text-xs font-semibold bg-white/5 border border-white/10 hover:bg-white/10 flex items-center">
@@ -138,7 +138,7 @@ export default function HomePage() {
             <div className="text-sm text-white/60 leading-relaxed mb-6">
               Point <code className="text-white/80">AI_PROVIDER=local</code> at your Ollama, ComfyUI or sd.cpp runtime. Zero data leaves your box.
             </div>
-            <a href="https://github.com/goatstarter/goat-ugc-ai#local-models" className="text-white/80 text-sm font-semibold hover:underline">Setup guide →</a>
+            <a href="https://github.com/burhankocabiyik/videomaker#local-models" className="text-white/80 text-sm font-semibold hover:underline">Setup guide →</a>
           </div>
         </div>
       </section>
@@ -151,7 +151,7 @@ export default function HomePage() {
           <Link href="/video" className="hover:text-white">Video</Link>
           <Link href="/create" className="hover:text-white">Image</Link>
           <Link href="/dashboard" className="hover:text-white">Dashboard</Link>
-          <a href="https://github.com/goatstarter/goat-ugc-ai" target="_blank" rel="noreferrer" className="hover:text-white">GitHub</a>
+          <a href="https://github.com/burhankocabiyik/videomaker" target="_blank" rel="noreferrer" className="hover:text-white">GitHub</a>
         </div>
       </footer>
     </div>
