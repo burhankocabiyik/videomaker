@@ -10,44 +10,43 @@ const PodcastPlayer = dynamic(
 
 const VIDEO_MODELS = [
     { id: 'seedance-2',         label: 'Seedance 2.0 (recommended)' },
-    { id: 'seedance-2-fast',    label: 'Seedance 2.0 Fast' },
     { id: 'veo3-i2v',           label: 'Google Veo 3 (i2v)' },
     { id: 'kling-v3-pro',       label: 'Kling v3 Pro' },
     { id: 'kling-v3-standard',  label: 'Kling v3 Standard' },
-    { id: 'kling-v3-4k',        label: 'Kling v3 4K' },
-    { id: 'kling-v2.1-master',  label: 'Kling v2.1 Master' },
-    { id: 'kling-v2.1-pro',     label: 'Kling v2.1 Pro' },
+    { id: 'seedance-2-fast',    label: 'Seedance 2.0 Fast (cheapest)' },
 ];
 
 const IMAGE_MODELS = [
     { id: 'nano-banana-2',   label: 'Nano Banana 2 (consistent characters)' },
     { id: 'nano-banana-pro', label: 'Nano Banana Pro' },
-    { id: 'flux-schnell',    label: 'Flux Schnell (fast)' },
+    { id: 'flux-pro',        label: 'Flux 1.1 Pro' },
     { id: 'seedream-v4',     label: 'Seedream v4' },
 ];
 
-// Each phase the pipeline walks through, surfaced in the UI as a checklist.
 const PHASES = [
-    { id: 'plan',           label: '1. Write the show' },
-    { id: 'wide',           label: '2. Establishing shot (both hosts in the room)' },
-    { id: 'host-anchor',    label: '3. Close-up: host (image-to-image from wide)' },
-    { id: 'guest-anchor',   label: '4. Close-up: guest (image-to-image from wide)' },
-    { id: 'scene-images',   label: '5. Per-scene character takes (image-to-image)' },
-    { id: 'scene-motion',   label: '6. Motion clips (Seedance / Kling / Veo)' },
-    { id: 'scene-voice',    label: '7. Voices (ElevenLabs)' },
-    { id: 'merged',         label: '8. Merge → single MP4' },
+    { id: 'plan',         label: '1. Write the show (alternating dialogue + takes)' },
+    { id: 'wide',         label: '2. Establishing shot (both hosts in the same room)' },
+    { id: 'host-anchor',  label: '3. Host close-up (image-to-image)' },
+    { id: 'guest-anchor', label: '4. Guest close-up (image-to-image)' },
+    { id: 'voice',        label: '5. Voice tracks per take (ElevenLabs)' },
+    { id: 'motion',       label: '6. Motion clips per take (Seedance / Kling / Veo)' },
+    { id: 'lipsync',      label: '7. Lip-sync each take (Sync-Lipsync 2.0 Pro)' },
+    { id: 'merged',       label: '8. Slice + concat → MP4' },
 ];
 
-function PhaseRow({ id, label, state }) {
+function PhaseRow({ id, label, state, detail }) {
     const dot =
-        state === 'running'  ? <span className="w-2.5 h-2.5 rounded-full bg-[#d9ff00] animate-pulse" /> :
-        state === 'done'     ? <span className="w-2.5 h-2.5 rounded-full bg-emerald-400" /> :
-        state === 'error'    ? <span className="w-2.5 h-2.5 rounded-full bg-red-400" /> :
-                                <span className="w-2.5 h-2.5 rounded-full bg-white/20" />;
+        state === 'running' ? <span className="w-2.5 h-2.5 rounded-full bg-[#d9ff00] animate-pulse" /> :
+        state === 'done'    ? <span className="w-2.5 h-2.5 rounded-full bg-emerald-400" /> :
+        state === 'error'   ? <span className="w-2.5 h-2.5 rounded-full bg-red-400" /> :
+                              <span className="w-2.5 h-2.5 rounded-full bg-white/20" />;
     return (
-        <li key={id} className="flex items-center gap-3 text-[12px]">
-            {dot}
-            <span className={state === 'done' ? 'text-white/80' : state === 'running' ? 'text-white' : 'text-white/40'}>{label}</span>
+        <li key={id} className="flex items-start gap-3 text-[12px]">
+            <span className="mt-1">{dot}</span>
+            <div>
+                <div className={state === 'done' ? 'text-white/80' : state === 'running' ? 'text-white' : 'text-white/40'}>{label}</div>
+                {detail ? <div className="text-[10px] text-white/40 mt-0.5">{detail}</div> : null}
+            </div>
         </li>
     );
 }
@@ -64,13 +63,15 @@ export default function PodcastClient({ serverKeyConfigured, providerLabel }) {
         videoModel: 'seedance-2',
         renderMotion: true,
         renderVoice: true,
+        renderLipsync: true,
     });
     const [plan, setPlan] = useState(null);
     const [wide, setWide] = useState(null);
-    const [anchors, setAnchors] = useState({});           // { host: url, guest: url }
-    const [assets, setAssets] = useState({});             // { sceneId: { imageUrl, videoUrl, audioUrl } }
-    const [phaseState, setPhaseState] = useState({});     // { phaseId: 'running'|'done'|'error' }
-    const [errors, setErrors] = useState({ global: '', byScene: {} });
+    const [anchors, setAnchors] = useState({});
+    const [takeAssets, setTakeAssets] = useState({});       // { takeId: { audioUrl, videoUrl, syncedUrl } }
+    const [phaseState, setPhaseState] = useState({});
+    const [phaseDetail, setPhaseDetail] = useState({});
+    const [errors, setErrors] = useState({ global: '', byTake: {} });
     const [running, setRunning] = useState(false);
     const [merging, setMerging] = useState(false);
     const [mergedUrl, setMergedUrl] = useState(null);
@@ -80,18 +81,11 @@ export default function PodcastClient({ serverKeyConfigured, providerLabel }) {
     const [analysisError, setAnalysisError] = useState('');
 
     const totalScenes = plan?.scenes?.length || 0;
-    const doneIds = useMemo(() => {
-        const s = new Set();
-        for (const [id, a] of Object.entries(assets)) {
-            if (a?.imageUrl) s.add(Number(id));
-        }
-        return s;
-    }, [assets]);
-
     const onChange = (patch) => setForm((f) => ({ ...f, ...patch }));
     const setPhase = (id, state) => setPhaseState((p) => ({ ...p, [id]: state }));
+    const setDetail = (id, text) => setPhaseDetail((p) => ({ ...p, [id]: text }));
 
-    // ── Reference video (optional) ───────────────────────────────────────────
+    // ── Reference video (optional) ─────────────────────────────────────────
     const handleAnalyze = async (file) => {
         setAnalyzing(true);
         setAnalysisError('');
@@ -112,7 +106,7 @@ export default function PodcastClient({ serverKeyConfigured, providerLabel }) {
         }
     };
 
-    // ── Pipeline ────────────────────────────────────────────────────────────
+    // ── Pipeline ───────────────────────────────────────────────────────────
     const handleRun = useCallback(async (e) => {
         e?.preventDefault();
         if (running || !form.appOrProduct.trim()) return;
@@ -120,15 +114,16 @@ export default function PodcastClient({ serverKeyConfigured, providerLabel }) {
         setPlan(null);
         setWide(null);
         setAnchors({});
-        setAssets({});
+        setTakeAssets({});
         setMergedUrl(null);
-        setErrors({ global: '', byScene: {} });
+        setErrors({ global: '', byTake: {} });
         setPhaseState({});
+        setPhaseDetail({});
 
         try {
-            // Phase 1 — plan
+            // 1 — plan
             setPhase('plan', 'running');
-            const planResponse = await fetch('/api/podcast/plan', {
+            const planResp = await fetch('/api/podcast/plan', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -142,86 +137,101 @@ export default function PodcastClient({ serverKeyConfigured, providerLabel }) {
                     topic: form.appOrProduct,
                 }),
             });
-            const planData = await planResponse.json();
-            if (!planResponse.ok) throw new Error(planData.error || 'plan failed');
+            const planData = await planResp.json();
+            if (!planResp.ok) throw new Error(planData.error || 'plan failed');
             setPlan(planData);
+            setDetail('plan', `${planData.scenes.length} scenes · ${planData.takes?.length || 0} takes`);
             setPhase('plan', 'done');
 
-            // Phase 2 — establishing wide shot of BOTH hosts in the SAME room
+            // 2 — wide
             setPhase('wide', 'running');
             const widePrompt = buildWidePrompt(planData);
             const wideResp = await fetch('/api/generate/image', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    prompt: widePrompt,
-                    model: form.imageModel,
-                    image_size: 'portrait_16_9',
-                }),
+                body: JSON.stringify({ prompt: widePrompt, model: form.imageModel, image_size: 'portrait_16_9' }),
             });
             const wideData = await wideResp.json();
-            if (!wideResp.ok || !wideData.url) throw new Error(wideData.error || 'wide shot failed');
+            if (!wideResp.ok || !wideData.url) throw new Error(wideData.error || 'wide failed');
             setWide(wideData.url);
             setPhase('wide', 'done');
 
-            // Phase 3 — speaker A close-up via image-to-image from the wide
-            const [hostSpeaker, guestSpeaker] = planData.speakers || [];
+            // 3 — host anchor (i2i)
+            const [a, b] = planData.speakers || [];
             setPhase('host-anchor', 'running');
-            const hostAnchor = await editAnchor(form.imageModel, wideData.url, hostSpeaker, 'left', planData.setting);
-            setAnchors((a) => ({ ...a, host: hostAnchor }));
+            const hostAnchor = await editAnchor(form.imageModel, wideData.url, a, 'left', planData);
+            setAnchors((m) => ({ ...m, host: hostAnchor }));
             setPhase('host-anchor', 'done');
 
-            // Phase 4 — guest close-up
+            // 4 — guest anchor (i2i)
             setPhase('guest-anchor', 'running');
-            const guestAnchor = await editAnchor(form.imageModel, wideData.url, guestSpeaker, 'right', planData.setting);
-            setAnchors((a) => ({ ...a, guest: guestAnchor }));
+            const guestAnchor = await editAnchor(form.imageModel, wideData.url, b, 'right', planData);
+            setAnchors((m) => ({ ...m, guest: guestAnchor }));
             setPhase('guest-anchor', 'done');
 
-            // Phase 5 — per-scene image (uses speaker anchor as reference)
-            setPhase('scene-images', 'running');
-            for (const scene of planData.scenes) {
-                const speakerAnchor = scene.speaker === hostSpeaker?.id ? hostAnchor : guestAnchor;
-                const sceneImage = await editScene(form.imageModel, speakerAnchor, scene);
-                setAssets((m) => ({ ...m, [scene.id]: { ...(m[scene.id] || {}), imageUrl: sceneImage } }));
-            }
-            setPhase('scene-images', 'done');
+            const anchorByTake = (takeId) => {
+                const take = planData.takes.find((t) => t.id === takeId);
+                return take.speaker === a.id ? hostAnchor : guestAnchor;
+            };
 
-            // Phase 6 — motion clips (per-scene, sequential to keep UI legible)
-            if (form.renderMotion) {
-                setPhase('scene-motion', 'running');
-                for (const scene of planData.scenes) {
-                    try {
-                        const clip = await renderMotion(scene, assetsCurrent(scene.id), form);
-                        setAssets((m) => ({ ...m, [scene.id]: { ...(m[scene.id] || {}), videoUrl: clip } }));
-                    } catch (err) {
-                        setErrors((e) => ({ ...e, byScene: { ...e.byScene, [scene.id]: 'motion: ' + err.message } }));
-                    }
-                }
-                setPhase('scene-motion', 'done');
-            } else {
-                setPhase('scene-motion', 'done');
-            }
-
-            // Phase 7 — voices
+            // 5 — voice per take
             if (form.renderVoice) {
-                setPhase('scene-voice', 'running');
-                for (const scene of planData.scenes) {
+                setPhase('voice', 'running');
+                let i = 0;
+                for (const take of planData.takes) {
+                    setDetail('voice', `take ${++i}/${planData.takes.length}: ${take.speaker}`);
+                    const audioUrl = await renderTakeVoice(take);
+                    setTakeAssets((m) => ({ ...m, [take.id]: { ...(m[take.id] || {}), audioUrl } }));
+                }
+                setPhase('voice', 'done');
+            } else setPhase('voice', 'done');
+
+            // 6 — motion per take
+            if (form.renderMotion) {
+                setPhase('motion', 'running');
+                let i = 0;
+                for (const take of planData.takes) {
+                    setDetail('motion', `take ${++i}/${planData.takes.length}: ${take.speaker} (${take.totalDuration}s)`);
                     try {
-                        const audio = await renderVoice(scene);
-                        setAssets((m) => ({ ...m, [scene.id]: { ...(m[scene.id] || {}), audioUrl: audio } }));
+                        const videoUrl = await renderTakeMotion({
+                            take, plan: planData, anchorUrl: anchorByTake(take.id), form,
+                        });
+                        setTakeAssets((m) => ({ ...m, [take.id]: { ...(m[take.id] || {}), videoUrl } }));
                     } catch (err) {
-                        setErrors((e) => ({ ...e, byScene: { ...e.byScene, [scene.id]: 'voice: ' + err.message } }));
+                        setErrors((e) => ({ ...e, byTake: { ...e.byTake, [take.id]: 'motion: ' + err.message } }));
                     }
                 }
-                setPhase('scene-voice', 'done');
-            } else {
-                setPhase('scene-voice', 'done');
-            }
+                setPhase('motion', 'done');
+            } else setPhase('motion', 'done');
 
-            // Phase 8 stays pending until user clicks Merge.
+            // 7 — lipsync per take (needs both audioUrl + videoUrl from prior phases)
+            if (form.renderLipsync && form.renderMotion && form.renderVoice) {
+                setPhase('lipsync', 'running');
+                let i = 0;
+                for (const take of planData.takes) {
+                    setDetail('lipsync', `take ${++i}/${planData.takes.length}`);
+                    const a = takeAssetsLatest()[take.id];
+                    if (!a?.videoUrl || !a?.audioUrl) {
+                        setErrors((e) => ({ ...e, byTake: { ...e.byTake, [take.id]: 'lipsync skipped: missing audio or video' } }));
+                        continue;
+                    }
+                    try {
+                        const r = await fetch('/api/generate/lipsync', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ video_url: a.videoUrl, audio_url: a.audioUrl, model: 'lipsync-2-pro' }),
+                        });
+                        const d = await r.json();
+                        if (!r.ok || !d.url) throw new Error(d.error || 'lipsync failed');
+                        setTakeAssets((m) => ({ ...m, [take.id]: { ...(m[take.id] || {}), syncedUrl: d.url } }));
+                    } catch (err) {
+                        setErrors((e) => ({ ...e, byTake: { ...e.byTake, [take.id]: 'lipsync: ' + err.message } }));
+                    }
+                }
+                setPhase('lipsync', 'done');
+            } else setPhase('lipsync', 'done');
         } catch (err) {
             setErrors((e) => ({ ...e, global: err.message }));
-            // mark current running phase as error.
             setPhaseState((p) => {
                 const next = { ...p };
                 for (const k of Object.keys(next)) if (next[k] === 'running') next[k] = 'error';
@@ -230,13 +240,13 @@ export default function PodcastClient({ serverKeyConfigured, providerLabel }) {
         } finally {
             setRunning(false);
         }
-    }, [form, running, analysis, plan]);
+    }, [form, running, analysis]);
 
-    const assetsCurrent = (id) => {
-        // Read latest assets for given scene from localStorage proxy.
-        // We read straight from React state via a function that closes over assets.
-        return assets[id] || {};
-    };
+    // The closure inside the for-loop captures the OUTDATED takeAssets state.
+    // takeAssetsLatest() reads the freshest snapshot via a ref-style trick.
+    const takeAssetsLatestRef = useRef(takeAssets);
+    takeAssetsLatestRef.current = takeAssets;
+    const takeAssetsLatest = () => takeAssetsLatestRef.current;
 
     const handleMerge = async () => {
         if (!plan) return;
@@ -247,7 +257,7 @@ export default function PodcastClient({ serverKeyConfigured, providerLabel }) {
             const response = await fetch('/api/podcast/render', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ plan, assets }),
+                body: JSON.stringify({ plan, takeAssets }),
             });
             const data = await response.json();
             if (!response.ok || !data.url) throw new Error(data.error || 'merge failed');
@@ -260,6 +270,26 @@ export default function PodcastClient({ serverKeyConfigured, providerLabel }) {
             setMerging(false);
         }
     };
+
+    // For Remotion live preview we still need per-scene assets. Each scene
+    // gets its own slice URL (we don't actually slice — we use the full take
+    // video for the preview; Remotion plays from each scene's takeOffsetSec
+    // for `duration` seconds). The merged MP4 is what gets the real cuts.
+    const remotionAssets = useMemo(() => {
+        const out = {};
+        if (!plan?.scenes) return out;
+        for (const scene of plan.scenes) {
+            const t = takeAssets[scene.takeId];
+            out[scene.id] = {
+                imageUrl: scene.speaker === plan.speakers?.[0]?.id ? anchors.host : anchors.guest,
+                videoUrl: t?.syncedUrl || t?.videoUrl || null,
+                audioUrl: t?.audioUrl || null,
+            };
+        }
+        return out;
+    }, [plan, takeAssets, anchors]);
+
+    const allTakesReady = (plan?.takes || []).every((t) => takeAssets[t.id]?.syncedUrl || takeAssets[t.id]?.videoUrl);
 
     return (
         <div className="grid lg:grid-cols-[400px_1fr] gap-6">
@@ -275,7 +305,6 @@ export default function PodcastClient({ serverKeyConfigured, providerLabel }) {
                             {analyzing ? 'Analyzing frames…' : analysis ? 'Re-analyze a different video' : 'Upload a reference clip'}
                         </button>
                     </div>
-                    {analysis ? <div className="text-[10px] text-emerald-400/80 mt-2">✓ Analyzed · {analysis?.format?.aspect || '?'}</div> : null}
                     {analysisError ? <div className="text-[11px] text-red-400 mt-2">{analysisError}</div> : null}
                 </div>
 
@@ -301,17 +330,17 @@ export default function PodcastClient({ serverKeyConfigured, providerLabel }) {
 
                 <div className="grid grid-cols-2 gap-3">
                     <div>
-                        <label className="block text-[11px] font-bold text-white/40 uppercase tracking-wider mb-2">Scenes</label>
+                        <label className="block text-[11px] font-bold text-white/40 uppercase tracking-wider mb-2">Lines (≤24)</label>
                         <select value={form.sceneCount} onChange={(e) => onChange({ sceneCount: Number(e.target.value) })}
                             className="w-full bg-black/40 border border-white/10 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-[#d9ff00]/30">
                             {[6, 8, 10, 12, 14, 16, 20].map((n) => <option key={n} value={n}>{n}</option>)}
                         </select>
                     </div>
                     <div>
-                        <label className="block text-[11px] font-bold text-white/40 uppercase tracking-wider mb-2">Clip length</label>
+                        <label className="block text-[11px] font-bold text-white/40 uppercase tracking-wider mb-2">Per-line</label>
                         <select value={form.clipDuration} onChange={(e) => onChange({ clipDuration: Number(e.target.value) })}
                             className="w-full bg-black/40 border border-white/10 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-[#d9ff00]/30">
-                            {[3, 4, 5, 6].map((n) => <option key={n} value={n}>{n}s</option>)}
+                            {[3, 4, 5].map((n) => <option key={n} value={n}>{n}s</option>)}
                         </select>
                     </div>
                 </div>
@@ -335,11 +364,15 @@ export default function PodcastClient({ serverKeyConfigured, providerLabel }) {
 
                 <label className="flex items-center gap-3 text-[12px] text-white/70 cursor-pointer">
                     <input type="checkbox" checked={form.renderMotion} onChange={(e) => onChange({ renderMotion: e.target.checked })} className="accent-[#d9ff00] w-4 h-4" />
-                    <span><b>Render motion clips</b> — Seedance/Kling/Veo animate each shot.</span>
+                    <span><b>Motion clips</b> — one long take per speaker (~10s each)</span>
                 </label>
                 <label className="flex items-center gap-3 text-[12px] text-white/70 cursor-pointer">
                     <input type="checkbox" checked={form.renderVoice} onChange={(e) => onChange({ renderVoice: e.target.checked })} className="accent-[#d9ff00] w-4 h-4" />
-                    <span><b>Generate voices</b> — host &amp; guest get distinct ElevenLabs voices, mixed into the final MP4.</span>
+                    <span><b>Voices</b> — ElevenLabs Roger (host) / Sarah (guest), one MP3 per take</span>
+                </label>
+                <label className="flex items-center gap-3 text-[12px] text-white/70 cursor-pointer">
+                    <input type="checkbox" checked={form.renderLipsync} onChange={(e) => onChange({ renderLipsync: e.target.checked })} className="accent-[#d9ff00] w-4 h-4" />
+                    <span><b>Lip-sync</b> — sync each take's mouth to its voice (Sync Lipsync 2.0 Pro)</span>
                 </label>
 
                 <button type="submit" disabled={running || !form.appOrProduct.trim()}
@@ -351,39 +384,36 @@ export default function PodcastClient({ serverKeyConfigured, providerLabel }) {
                     <div className="text-[11px] text-amber-400/80 bg-amber-400/5 border border-amber-400/20 rounded-md p-3">No server key for <b>{providerLabel}</b>. Set <code>FAL_KEY</code>.</div>
                 ) : null}
                 {errors.global ? <div className="text-[11px] text-red-400 bg-red-500/5 border border-red-500/20 rounded-md p-3">{errors.global}</div> : null}
+
+                <div className="text-[11px] text-white/40 leading-relaxed">
+                    Cost guide (Seedance 2.0): ~$0.50 / take × 2-3 takes + ~$5 lipsync per video ≈ $7-8 per episode.
+                </div>
             </form>
 
             {/* Right column */}
             <div className="space-y-4">
-                {/* Phases */}
                 <div className="rounded-xl border border-white/[0.05] bg-white/[0.02] p-5">
                     <div className="text-[11px] font-bold text-white/40 uppercase tracking-wider mb-3">Pipeline</div>
                     <ul className="space-y-2">
-                        {PHASES.map((p) => <PhaseRow key={p.id} id={p.id} label={p.label} state={phaseState[p.id]} />)}
+                        {PHASES.map((p) => <PhaseRow key={p.id} id={p.id} label={p.label} state={phaseState[p.id]} detail={phaseDetail[p.id]} />)}
                     </ul>
                 </div>
 
-                {/* Establishing + anchors gallery */}
                 {(wide || anchors.host || anchors.guest) ? (
                     <div className="rounded-xl border border-white/[0.05] bg-white/[0.02] p-5">
                         <div className="text-[11px] font-bold text-white/40 uppercase tracking-wider mb-3">Identity locks (one shared room)</div>
                         <div className="grid grid-cols-3 gap-3">
-                            {[{ id: 'wide', src: wide, label: 'Establishing wide' },
-                              { id: 'host', src: anchors.host, label: 'Host close-up (i2i)' },
-                              { id: 'guest', src: anchors.guest, label: 'Guest close-up (i2i)' }
-                             ].map((a) => (
-                                <div key={a.id}>
+                            {[{ src: wide, label: 'Establishing wide' },
+                              { src: anchors.host, label: 'Host close-up' },
+                              { src: anchors.guest, label: 'Guest close-up' }].map((a, i) => (
+                                <div key={i}>
                                     <div className="aspect-[9/16] rounded-md overflow-hidden bg-black/50 border border-white/5">
-                                        {a.src ? (
-                                            // eslint-disable-next-line @next/next/no-img-element
-                                            <img src={a.src} alt="" className="w-full h-full object-cover" />
-                                        ) : (
-                                            <div className="w-full h-full flex items-center justify-center text-white/30 text-[10px]">…</div>
-                                        )}
+                                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                                        {a.src ? <img src={a.src} alt="" className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center text-white/30 text-[10px]">…</div>}
                                     </div>
                                     <div className="text-[10px] text-white/50 mt-1 text-center">{a.label}</div>
                                 </div>
-                             ))}
+                            ))}
                         </div>
                     </div>
                 ) : null}
@@ -394,63 +424,51 @@ export default function PodcastClient({ serverKeyConfigured, providerLabel }) {
                             <div>
                                 <div className="text-[11px] font-bold text-[#d9ff00] uppercase tracking-wider mb-1">{plan.showName}</div>
                                 <div className="text-xl font-bold">{plan.hook || 'Two-speaker show'}</div>
-                                <div className="text-[11px] text-white/40 mt-1">{totalScenes} scenes · {(plan.speakers || []).map((s) => s.id).join(' ↔ ')}</div>
-                                <div className="text-[10px] text-white/30 mt-2 line-clamp-2 max-w-md" title={plan.setting}>{plan.setting}</div>
+                                <div className="text-[11px] text-white/40 mt-1">{totalScenes} lines · {(plan.takes || []).length} takes · {(plan.speakers || []).map((s) => s.id).join(' ↔ ')}</div>
                             </div>
                             <div className="text-right">
-                                <button
-                                    onClick={handleMerge}
-                                    disabled={merging || running || doneIds.size < totalScenes || totalScenes === 0}
+                                <button onClick={handleMerge} disabled={merging || running || !allTakesReady}
                                     className="h-9 px-4 rounded-md text-xs font-bold bg-[#d9ff00] text-black hover:bg-[#e5ff33] disabled:opacity-40">
-                                    {merging ? 'Merging…' : 'Merge → MP4'}
+                                    {merging ? 'Merging…' : 'Slice → MP4'}
                                 </button>
-                                {mergedUrl ? (
-                                    <a href={mergedUrl} download className="block text-[11px] text-[#d9ff00] hover:underline mt-2">
-                                        Download merged.mp4 ↓
-                                    </a>
-                                ) : null}
+                                {mergedUrl ? <a href={mergedUrl} download className="block text-[11px] text-[#d9ff00] hover:underline mt-2">Download merged.mp4 ↓</a> : null}
                             </div>
                         </div>
-                        <PodcastPlayer plan={plan} assets={assets} />
-                        {mergedUrl ? (
-                            <video src={mergedUrl} controls className="mt-4 w-full max-w-[360px] mx-auto rounded-md bg-black" />
-                        ) : null}
+                        <PodcastPlayer plan={plan} assets={remotionAssets} />
+                        {mergedUrl ? <video src={mergedUrl} controls className="mt-4 w-full max-w-[360px] mx-auto rounded-md bg-black" /> : null}
                     </div>
                 ) : (
                     <div className="rounded-xl border border-dashed border-white/10 p-10 text-center text-sm text-white/40">
-                        Fill the brief on the left and hit “Generate podcast”. Watch each phase finish on the right.
+                        Fill the brief and hit Generate. The pipeline runs phase by phase on the right.
                     </div>
                 )}
 
-                {plan?.scenes?.length ? (
+                {plan?.takes?.length ? (
                     <div className="rounded-xl border border-white/[0.05] bg-white/[0.02] p-5">
-                        <div className="text-[11px] font-bold text-white/40 uppercase tracking-wider mb-3">Dialogue · scene shot list</div>
+                        <div className="text-[11px] font-bold text-white/40 uppercase tracking-wider mb-3">Takes — long-form continuous shots</div>
                         <ul className="space-y-3">
-                            {plan.scenes.map((scene) => {
-                                const a = assets[scene.id] || {};
-                                const sceneErr = errors.byScene?.[scene.id];
+                            {plan.takes.map((take) => {
+                                const a = takeAssets[take.id] || {};
+                                const err = errors.byTake?.[take.id];
                                 return (
-                                    <li key={scene.id} className="flex gap-4 items-stretch">
-                                        <div className="w-24 flex-none">
-                                            <div className="aspect-[9/16] rounded-md overflow-hidden bg-black/50 border border-white/5 relative">
-                                                {a.videoUrl ? (
-                                                    <video src={a.videoUrl} className="w-full h-full object-cover" muted loop playsInline autoPlay />
-                                                ) : a.imageUrl ? (
-                                                    // eslint-disable-next-line @next/next/no-img-element
-                                                    <img src={a.imageUrl} alt="" className="w-full h-full object-cover" />
-                                                ) : (
-                                                    <div className="w-full h-full flex items-center justify-center text-white/30 text-[10px]">queued</div>
-                                                )}
+                                    <li key={take.id} className="flex gap-4 items-stretch">
+                                        <div className="w-32 flex-none">
+                                            <div className="aspect-[9/16] rounded-md overflow-hidden bg-black/50 border border-white/5">
+                                                {a.syncedUrl ? <video src={a.syncedUrl} className="w-full h-full object-cover" muted loop playsInline autoPlay />
+                                                  : a.videoUrl ? <video src={a.videoUrl} className="w-full h-full object-cover" muted loop playsInline autoPlay />
+                                                  : <div className="w-full h-full flex items-center justify-center text-white/30 text-[10px]">…</div>}
                                             </div>
-                                            <div className="text-[10px] text-white/50 mt-1 text-center font-bold uppercase tracking-wider">{scene.speaker}</div>
+                                            <div className="text-[10px] text-white/50 mt-1 text-center font-bold uppercase">{take.id}</div>
+                                            <div className="text-[10px] text-white/40 mt-0.5 text-center">{take.totalDuration}s · {take.lines.length} lines</div>
                                         </div>
                                         <div className="flex-1 min-w-0">
-                                            <div className="text-[11px] text-white/50 mb-1">Scene {scene.id} · {scene.duration}s {scene.productPop ? '· product pop' : ''}</div>
-                                            <div className="text-sm text-white/90 leading-snug font-semibold">&ldquo;{scene.text}&rdquo;</div>
-                                            {a.audioUrl ? (
-                                                <audio src={a.audioUrl} controls className="mt-1 h-6" />
-                                            ) : null}
-                                            {sceneErr ? <div className="text-[11px] text-amber-400/80 mt-1">⚠ {sceneErr}</div> : null}
+                                            <div className="text-sm text-white/85 leading-snug font-semibold mb-1">&ldquo;{take.combinedText}&rdquo;</div>
+                                            <div className="text-[10px] text-white/40 space-y-0.5">
+                                                {a.videoUrl ? <div>i2v: <a className="text-white/60 hover:underline" target="_blank" rel="noreferrer" href={a.videoUrl}>open</a></div> : null}
+                                                {a.audioUrl ? <div className="flex items-center gap-2">audio: <audio src={a.audioUrl} controls className="h-5 inline-block" /></div> : null}
+                                                {a.syncedUrl ? <div>lipsynced: <a className="text-emerald-400 hover:underline" target="_blank" rel="noreferrer" href={a.syncedUrl}>open ↗</a></div> : null}
+                                                {err ? <div className="text-amber-400/90">⚠ {err}</div> : null}
+                                            </div>
                                         </div>
                                     </li>
                                 );
@@ -467,67 +485,67 @@ export default function PodcastClient({ serverKeyConfigured, providerLabel }) {
 function buildWidePrompt(plan) {
     const [a, b] = plan.speakers || [];
     return [
-        'Wide establishing shot, vertical 9:16, two podcast hosts sitting across from each other in the same room.',
+        'A photorealistic, raw, NOT-AI-looking wide establishing photo — vertical 9:16, two real-looking podcast hosts in the same room, mid-conversation candid pose.',
         plan.setting ? `Setting: ${plan.setting}.` : null,
-        a ? `Left armchair host (the show's HOST): ${a.appearance}, wearing ${a.wardrobe}.` : null,
-        b ? `Right armchair host (the GUEST): ${b.appearance}, wearing ${b.wardrobe}.` : null,
-        'Both clearly visible in the same frame, both with microphones in front, identical lighting, identical wall and bookshelf, cinematic depth.',
-        'Photo-realistic, sharp focus, soft warm light, no text, no logos, no watermarks.',
+        a ? `Left armchair host (HOST): ${a.appearance}, wearing ${a.wardrobe}.` : null,
+        b ? `Right armchair host (GUEST): ${b.appearance}, wearing ${b.wardrobe}.` : null,
+        'Both clearly in the same frame, microphones in front of them, identical lighting, identical wall and bookshelf.',
+        'Shot on Sony a7S III, 35mm prime f/2.8, ISO 800, raw unedited still — looks like a frame grab from a documentary podcast, NOT a generated render.',
+        'Photorealistic skin texture: visible pores, peach fuzz, faint shadows under the eyes, fine asymmetric features, no airbrushing, no plastic skin, no waxy CGI look.',
+        'Natural HDR colour, fine grain, mild teal-orange balance, soft warm tungsten key from frame-left, soft window fill from frame-right.',
+        'NOT AI-looking, no symmetric face, no plastic doll skin, no over-smoothing, no extra fingers, no warped hands, no on-screen text, no watermark.',
     ].filter(Boolean).join(' ');
 }
 
-async function editAnchor(model, wideUrl, speaker, side, setting) {
+async function editAnchor(model, wideUrl, speaker, side, plan) {
     const prompt = [
-        `Re-render only as a vertical 9:16 medium close-up of the ${side.toUpperCase()} host from this exact same scene — the ${speaker?.persona || ''} ${speaker?.appearance || ''}.`,
-        'Keep the SAME room, SAME lighting, SAME wardrobe, SAME microphone, SAME bookshelf and props that are visible in the reference image.',
-        speaker?.framing ? `Framing: ${speaker.framing}.` : 'Framing: medium close-up, microphone visible, eyes to camera.',
-        'Photo-realistic, sharp focus.',
+        `Re-render only as a vertical 9:16 medium close-up of the ${side.toUpperCase()} podcast host from this exact same scene — the ${speaker?.persona || ''} ${speaker?.appearance || ''}.`,
+        'Keep the SAME room, SAME lighting, SAME wardrobe, SAME microphone, SAME bookshelf and props as the reference image.',
+        'Medium close-up, eye-level, microphone visible in lower third, eyes toward the other host across the table.',
+        'Photorealistic skin texture: visible pores, peach fuzz, faint shadows under the eyes, fine asymmetric features, no airbrushing, no plastic skin.',
+        'Shot on Sony a7S III, 35mm f/2.8, ISO 800, raw documentary still.',
+        'NOT AI-looking, no waxy texture, no glossy CGI, no over-smoothing, no symmetric face, no extra fingers.',
     ].join(' ');
     const r = await fetch('/api/generate/image', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            prompt,
-            model,
-            reference_image_url: wideUrl,
-            image_size: 'portrait_16_9',
-        }),
+        body: JSON.stringify({ prompt, model, reference_image_url: wideUrl, image_size: 'portrait_16_9' }),
     });
     const d = await r.json();
     if (!r.ok || !d.url) throw new Error(d.error || `${side} anchor failed`);
     return d.url;
 }
 
-async function editScene(model, anchorUrl, scene) {
-    const prompt = [
-        'Same character, same wardrobe, same room, same lighting, same microphone — only the EXPRESSION/GESTURE changes for this beat.',
-        scene.imagePrompt || 'Speaking into the microphone, natural expression.',
-        'Vertical 9:16, medium close-up, photo-realistic.',
-    ].join(' ');
-    const r = await fetch('/api/generate/image', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            prompt,
-            model,
-            reference_image_url: anchorUrl,
-            image_size: 'portrait_16_9',
-        }),
-    });
-    const d = await r.json();
-    if (!r.ok || !d.url) throw new Error(d.error || 'scene image failed');
-    return d.url;
-}
+async function renderTakeMotion({ take, plan, anchorUrl, form }) {
+    const speaker = (plan.speakers || []).find((s) => s.id === take.speaker);
+    // Build a take-level realism prompt: speaker says the COMBINED dialogue
+    // continuously, sitting in the same chair, natural micro-motion.
+    const settingLine = plan.setting;
+    const promptText = [
+        `A photorealistic, raw, NOT-AI-looking podcast clip — vertical 9:16, take ${take.id}, ${take.totalDuration}s continuous shot of ONE host (the ${take.speaker}) speaking the dialogue below into a podcast microphone.`,
+        `Character: ${speaker?.appearance || ''}, wearing ${speaker?.wardrobe || ''}. Same room, same lighting, same chair as the reference.`,
+        `Setting: ${settingLine}.`,
+        `Cinematography: medium close-up, eye-level, 35mm f/2.8, deep DOF, subtle handheld micro-shake, breathing-driven head bob, occasional micro-rotation as the host glances across the table at the OTHER host, gentle weight shifts. NO Dutch angle, NO whip pans, NO jitter.`,
+        `Lighting: practical-only — warm tungsten key from frame-left, soft window fill from frame-right, faint catch lights in both eyes.`,
+        `Color & Grade: natural HDR with NO over-smoothing — visible pores, peach fuzz, micro shadows under the eyes, asymmetric features, fine grain, true skin tones.`,
+        `Performance: speak the lines below naturally, with conversational energy, real micro-expressions, occasional chuckle, eyes alternating between the camera and the other host.`,
+        `Dialogue:`,
+        `"${take.combinedText}"`,
+        `Audio & Ambience: Shure SM7B close to mouth, present voice, natural mouth sounds, faint armchair creak, very faint room tone, no music, no cuts, ONE TAKE natural pacing.`,
+        `Authenticity: photorealistic podcast realism, NOT AI-looking, raw skin texture, real micro-expressions, asymmetric features, lived-in clothing creases, vertical 9:16, intimate co-host energy.`,
+        `Quality control: no plastic skin, no airbrushed face, no symmetric eyes, no over-smoothing, no waxy texture, no glossy CGI look, no extra fingers, no warped hands, no flicker, no rolling shutter, no on-screen text, no watermark, no frame stutter.`,
+    ].join('\n');
 
-async function renderMotion(scene, sceneAssets, form) {
+    // Clamp duration to model-friendly window.
+    const requested = Math.max(5, Math.min(10, take.totalDuration));
     const r = await fetch('/api/generate/video', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-            prompt: scene.videoPrompt || 'subtle talking, mouth movement, soft head tilt, natural micro-motion',
-            image_url: sceneAssets.imageUrl,
+            prompt: promptText,
+            image_url: anchorUrl,
             model: form.videoModel,
-            duration: String(scene.duration || form.clipDuration),
+            duration: String(requested),
             aspect_ratio: '9:16',
         }),
     });
@@ -536,11 +554,11 @@ async function renderMotion(scene, sceneAssets, form) {
     return d.url;
 }
 
-async function renderVoice(scene) {
+async function renderTakeVoice(take) {
     const r = await fetch('/api/generate/voice', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: scene.text, speaker: scene.speaker }),
+        body: JSON.stringify({ text: take.combinedText, speaker: take.speaker }),
     });
     const d = await r.json();
     if (!r.ok || !d.url) throw new Error(d.error || 'voice failed');
