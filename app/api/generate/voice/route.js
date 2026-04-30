@@ -13,6 +13,7 @@ export async function POST(request) {
         const out = await generateVoice({
             text: body.text,
             speaker: body.speaker || 'host',
+            gender: body.gender,
             voice: body.voice,
         });
         return NextResponse.json(out);

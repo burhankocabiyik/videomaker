@@ -180,7 +180,8 @@ export default function PodcastClient({ serverKeyConfigured, providerLabel }) {
                 let i = 0;
                 for (const take of planData.takes) {
                     setDetail('voice', `take ${++i}/${planData.takes.length}: ${take.speaker}`);
-                    const audioUrl = await renderTakeVoice(take);
+                    const sp = (planData.speakers || []).find((s) => s.id === take.speaker);
+                    const audioUrl = await renderTakeVoice(take, sp);
                     setTakeAssets((m) => ({ ...m, [take.id]: { ...(m[take.id] || {}), audioUrl } }));
                 }
                 setPhase('voice', 'done');
@@ -484,27 +485,37 @@ export default function PodcastClient({ serverKeyConfigured, providerLabel }) {
 // ── Helpers ────────────────────────────────────────────────────────────────
 function buildWidePrompt(plan) {
     const [a, b] = plan.speakers || [];
+    const aSide = a?.cameraSide === 'right' ? 'right' : 'left';
+    const bSide = aSide === 'left' ? 'right' : 'left';
     return [
-        'A photorealistic, raw, NOT-AI-looking wide establishing photo — vertical 9:16, two real-looking podcast hosts in the same room, mid-conversation candid pose.',
+        'A photorealistic, raw, NOT-AI-looking wide establishing PROFILE shot — vertical 9:16, two real-looking podcast hosts sitting in armchairs ACROSS FROM EACH OTHER in the same room.',
+        'The camera is positioned to the side of the conversation — both hosts are seen at a 3-quarter angle / partial profile, NOT facing the camera.',
         plan.setting ? `Setting: ${plan.setting}.` : null,
-        a ? `Left armchair host (HOST): ${a.appearance}, wearing ${a.wardrobe}.` : null,
-        b ? `Right armchair host (GUEST): ${b.appearance}, wearing ${b.wardrobe}.` : null,
-        'Both clearly in the same frame, microphones in front of them, identical lighting, identical wall and bookshelf.',
-        'Shot on Sony a7S III, 35mm prime f/2.8, ISO 800, raw unedited still — looks like a frame grab from a documentary podcast, NOT a generated render.',
-        'Photorealistic skin texture: visible pores, peach fuzz, faint shadows under the eyes, fine asymmetric features, no airbrushing, no plastic skin, no waxy CGI look.',
-        'Natural HDR colour, fine grain, mild teal-orange balance, soft warm tungsten key from frame-left, soft window fill from frame-right.',
-        'NOT AI-looking, no symmetric face, no plastic doll skin, no over-smoothing, no extra fingers, no warped hands, no on-screen text, no watermark.',
+        a ? `${aSide.toUpperCase()} armchair (the HOST, ${a.gender || 'male'}): ${a.appearance}, wearing ${a.wardrobe}. Their body is angled toward the OTHER host across the table; they are LOOKING AT the other host, NOT at the camera.` : null,
+        b ? `${bSide.toUpperCase()} armchair (the GUEST, ${b.gender || 'female'}): ${b.appearance}, wearing ${b.wardrobe}. Their body is angled toward the HOST; they are LOOKING AT the host, NOT at the camera.` : null,
+        'Both visible in the same frame, identical lighting, identical wall and bookshelf, two podcast microphones on adjustable boom arms entering from the SIDES of frame.',
+        'Shot on Sony a7S III, 35mm prime f/2.8, ISO 800, raw unedited still — fly-on-the-wall observer angle, looks like a frame grab from a documentary podcast, NOT a generated render.',
+        'Photorealistic skin texture: visible pores, peach fuzz, faint shadows under the eyes, asymmetric features, no airbrushing, no plastic skin, no waxy CGI look.',
+        'Natural HDR colour, fine grain, mild teal-orange balance, warm tungsten key, soft ambient fill.',
+        'CRITICAL: NEITHER host looks at the camera. Eyes are LOCKED on each other across the table. NOT AI-looking, no symmetric face, no plastic doll skin, no extra fingers, no on-screen text, no watermark.',
     ].filter(Boolean).join(' ');
 }
 
 async function editAnchor(model, wideUrl, speaker, side, plan) {
+    // side describes where the speaker SITS in the frame; their gaze points
+    // to the OPPOSITE side (off-frame at the other host).
+    const sitsSide = String(speaker?.cameraSide || side || 'left').toLowerCase();
+    const gazeDirection = sitsSide === 'left' ? 'right' : 'left';
+    const bodyAngle = sitsSide === 'left' ? '30 degrees toward camera-right' : '30 degrees toward camera-left';
     const prompt = [
-        `Re-render only as a vertical 9:16 medium close-up of the ${side.toUpperCase()} podcast host from this exact same scene — the ${speaker?.persona || ''} ${speaker?.appearance || ''}.`,
-        'Keep the SAME room, SAME lighting, SAME wardrobe, SAME microphone, SAME bookshelf and props as the reference image.',
-        'Medium close-up, eye-level, microphone visible in lower third, eyes toward the other host across the table.',
-        'Photorealistic skin texture: visible pores, peach fuzz, faint shadows under the eyes, fine asymmetric features, no airbrushing, no plastic skin.',
-        'Shot on Sony a7S III, 35mm f/2.8, ISO 800, raw documentary still.',
-        'NOT AI-looking, no waxy texture, no glossy CGI, no over-smoothing, no symmetric face, no extra fingers.',
+        `Re-render only as a vertical 9:16 medium close-up PROFILE / 3-quarter angle of the ${sitsSide.toUpperCase()}-side podcast host from this exact same scene — a ${speaker?.gender || 'male'} ${speaker?.persona || ''}, ${speaker?.appearance || ''}, wearing ${speaker?.wardrobe || ''}.`,
+        `IMPORTANT: the host is sitting on the ${sitsSide.toUpperCase()} half of frame, body rotated ${bodyAngle}, GAZE locked OFF-FRAME to the ${gazeDirection.toUpperCase()} (looking AT the OTHER host across the table). They DO NOT look at the camera.`,
+        'A microphone boom arm enters from the same side the host is sitting on — visible at frame edge but not centered.',
+        'Keep the SAME room, SAME lighting, SAME wardrobe, SAME bookshelf and props as the reference image.',
+        'Medium close-up, eye-level, candid mid-talk pose. Camera is fly-on-the-wall to the side of the conversation.',
+        'Photorealistic skin texture: visible pores, peach fuzz, faint shadows, asymmetric features, no airbrushing, no plastic skin.',
+        'Shot on Sony a7S III, 35mm f/2.8, ISO 800, raw documentary still — looks like a frame grab from real podcast footage.',
+        'NOT AI-looking, NO eye contact with the camera, no waxy texture, no glossy CGI, no over-smoothing, no symmetric face, no extra fingers, no watermark.',
     ].join(' ');
     const r = await fetch('/api/generate/image', {
         method: 'POST',
@@ -512,28 +523,29 @@ async function editAnchor(model, wideUrl, speaker, side, plan) {
         body: JSON.stringify({ prompt, model, reference_image_url: wideUrl, image_size: 'portrait_16_9' }),
     });
     const d = await r.json();
-    if (!r.ok || !d.url) throw new Error(d.error || `${side} anchor failed`);
+    if (!r.ok || !d.url) throw new Error(d.error || `${sitsSide} anchor failed`);
     return d.url;
 }
 
 async function renderTakeMotion({ take, plan, anchorUrl, form }) {
     const speaker = (plan.speakers || []).find((s) => s.id === take.speaker);
-    // Build a take-level realism prompt: speaker says the COMBINED dialogue
-    // continuously, sitting in the same chair, natural micro-motion.
+    const sitsSide = String(speaker?.cameraSide || 'left').toLowerCase();
+    const gazeDirection = sitsSide === 'left' ? 'right' : 'left';
     const settingLine = plan.setting;
     const promptText = [
-        `A photorealistic, raw, NOT-AI-looking podcast clip — vertical 9:16, take ${take.id}, ${take.totalDuration}s continuous shot of ONE host (the ${take.speaker}) speaking the dialogue below into a podcast microphone.`,
+        `A photorealistic, raw, NOT-AI-looking podcast clip — vertical 9:16, take ${take.id}, ${take.totalDuration}s continuous PROFILE / 3-quarter shot of ONE host (the ${speaker?.gender || 'male'} ${take.speaker}) speaking the dialogue below into a podcast microphone.`,
         `Character: ${speaker?.appearance || ''}, wearing ${speaker?.wardrobe || ''}. Same room, same lighting, same chair as the reference.`,
         `Setting: ${settingLine}.`,
-        `Cinematography: medium close-up, eye-level, 35mm f/2.8, deep DOF, subtle handheld micro-shake, breathing-driven head bob, occasional micro-rotation as the host glances across the table at the OTHER host, gentle weight shifts. NO Dutch angle, NO whip pans, NO jitter.`,
-        `Lighting: practical-only — warm tungsten key from frame-left, soft window fill from frame-right, faint catch lights in both eyes.`,
-        `Color & Grade: natural HDR with NO over-smoothing — visible pores, peach fuzz, micro shadows under the eyes, asymmetric features, fine grain, true skin tones.`,
-        `Performance: speak the lines below naturally, with conversational energy, real micro-expressions, occasional chuckle, eyes alternating between the camera and the other host.`,
+        `Camera & framing: the host sits on the ${sitsSide.toUpperCase()} half of the frame, body rotated toward camera-${gazeDirection}, GAZE locked OFF-FRAME to the ${gazeDirection.toUpperCase()} at the other host across the table. The camera is fly-on-the-wall to the side of the conversation. The host NEVER looks at the camera. Microphone boom arm enters from the host's own side.`,
+        `Cinematography: medium close-up, 35mm f/2.8, deep DOF, subtle handheld micro-shake, breathing head bob, occasional micro-rotation as eyes track the other host. NO Dutch angle, NO whip pans, NO jitter.`,
+        `Lighting: practical-only — warm tungsten key, soft ambient fill, faint catch lights.`,
+        `Color & Grade: natural HDR with NO over-smoothing — visible pores, peach fuzz, micro shadows, asymmetric features, fine grain, true skin tones.`,
+        `Performance: speak the lines naturally with conversational energy, real micro-expressions, occasional chuckle, occasional brief glance up but always RETURNING to the other host. NEVER look at the camera.`,
         `Dialogue:`,
         `"${take.combinedText}"`,
         `Audio & Ambience: Shure SM7B close to mouth, present voice, natural mouth sounds, faint armchair creak, very faint room tone, no music, no cuts, ONE TAKE natural pacing.`,
         `Authenticity: photorealistic podcast realism, NOT AI-looking, raw skin texture, real micro-expressions, asymmetric features, lived-in clothing creases, vertical 9:16, intimate co-host energy.`,
-        `Quality control: no plastic skin, no airbrushed face, no symmetric eyes, no over-smoothing, no waxy texture, no glossy CGI look, no extra fingers, no warped hands, no flicker, no rolling shutter, no on-screen text, no watermark, no frame stutter.`,
+        `Quality control: no plastic skin, no airbrushed face, no symmetric eyes, no over-smoothing, no waxy texture, no glossy CGI look, no extra fingers, no warped hands, no flicker, no rolling shutter, no on-screen text, no watermark, no eye-contact-with-camera, no frame stutter.`,
     ].join('\n');
 
     // Clamp duration to model-friendly window.
@@ -554,11 +566,15 @@ async function renderTakeMotion({ take, plan, anchorUrl, form }) {
     return d.url;
 }
 
-async function renderTakeVoice(take) {
+async function renderTakeVoice(take, speaker) {
     const r = await fetch('/api/generate/voice', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: take.combinedText, speaker: take.speaker }),
+        body: JSON.stringify({
+            text: take.combinedText,
+            speaker: take.speaker,
+            gender: speaker?.gender,
+        }),
     });
     const d = await r.json();
     if (!r.ok || !d.url) throw new Error(d.error || 'voice failed');
