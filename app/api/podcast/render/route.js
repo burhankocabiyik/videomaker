@@ -36,6 +36,23 @@ async function download(url, filePath) {
     await writeFile(filePath, buf);
 }
 
+/**
+ * Probe a media file's duration in seconds. Returns null on failure so the
+ * caller can fall back to the planned duration.
+ */
+async function probeDuration(filePath) {
+    return new Promise((resolve) => {
+        const proc = spawn('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', filePath], { stdio: ['ignore', 'pipe', 'ignore'] });
+        let out = '';
+        proc.stdout.on('data', (d) => { out += d.toString(); });
+        proc.on('error', () => resolve(null));
+        proc.on('close', () => {
+            const n = parseFloat(out.trim());
+            resolve(Number.isFinite(n) ? n : null);
+        });
+    });
+}
+
 export async function POST(request) {
     let workdir;
     try {
@@ -61,7 +78,41 @@ export async function POST(request) {
                 audioPath = path.join(workdir, `${take.id}-audio.mp3`);
                 await download(a.audioUrl, audioPath);
             }
-            masters[take.id] = { videoPath, audioPath, hasSyncedAudio: usingSynced };
+            const videoDuration = await probeDuration(videoPath);
+            const audioDuration = audioPath ? await probeDuration(audioPath) : null;
+            masters[take.id] = {
+                videoPath,
+                audioPath,
+                hasSyncedAudio: usingSynced,
+                videoDuration,
+                audioDuration,
+            };
+            console.log(`[render] take ${take.id}: video=${videoDuration?.toFixed(2)}s audio=${audioDuration?.toFixed(2) || 'n/a'}s`);
+        }
+
+        // Build a per-take "scene plan" with safe slicing. If the actual take
+        // video is shorter than the sum of scene durations the planner asked
+        // for, we proportionally rescale every scene in that take so all
+        // scenes still appear in the final cut (no silent drops).
+        const sceneOverride = new Map();
+        for (const take of plan.takes) {
+            const m = masters[take.id];
+            const planned = (take.totalDuration || 0);
+            const actual  = m.videoDuration || planned;
+            // Leave a 0.05s safety pad so slicing never overruns the clip end.
+            const usable = Math.max(0.5, actual - 0.05);
+            const scale = planned > 0 ? Math.min(1, usable / planned) : 1;
+            if (scale < 0.999) {
+                console.log(`[render] take ${take.id} scale=${scale.toFixed(3)} (planned ${planned}s, actual ${actual.toFixed(2)}s)`);
+            }
+            let cursor = 0;
+            for (const sceneId of take.sceneIds) {
+                const sc = plan.scenes.find((s) => s.id === sceneId);
+                if (!sc) continue;
+                const newDur = Math.max(0.5, (sc.duration || 0) * scale);
+                sceneOverride.set(sceneId, { takeOffsetSec: cursor, duration: newDur });
+                cursor += newDur;
+            }
         }
 
         const brandCopy   = plan?.brandSticker?.copy   || plan?.showName || '';
@@ -72,8 +123,9 @@ export async function POST(request) {
         for (const [idx, scene] of plan.scenes.entries()) {
             const m = masters[scene.takeId];
             if (!m) throw new Error(`scene ${scene.id}: master ${scene.takeId} missing`);
-            const start = Number(scene.takeOffsetSec) || 0;
-            const dur   = Number(scene.duration)      || 3;
+            const ov    = sceneOverride.get(scene.id);
+            const start = Number(ov?.takeOffsetSec ?? scene.takeOffsetSec) || 0;
+            const dur   = Number(ov?.duration ?? scene.duration) || 3;
             const slicePath = path.join(workdir, `slice-${String(idx).padStart(3, '0')}.mp4`);
             const sliceWorkdir = path.join(workdir, `s${idx}`);
             await mkdir(sliceWorkdir, { recursive: true });
